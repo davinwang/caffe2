@@ -19,7 +19,7 @@ IdList = schema.List(np.int64)
 IdScoreList = schema.Map(np.int64, np.float32)
 
 
-def get_categorical_limit(record):
+def get_key(record):
     if schema.equal_schemas(record, IdList):
         key = 'values'
     elif schema.equal_schemas(record, IdScoreList, check_field_types=False):
@@ -28,7 +28,12 @@ def get_categorical_limit(record):
         raise NotImplementedError()
     assert record[key].metadata is not None, (
         "Blob {} doesn't have metadata".format(str(record[key]())))
-    return record[key].metadata.categorical_limit
+    return record[key]
+
+
+def get_categorical_limit(record):
+    key = get_key(record)
+    return key.metadata.categorical_limit
 
 
 def set_request_only(field):
@@ -291,6 +296,21 @@ class ModelLayer(object):
             # so extend is used
             if param.initializer:
                 init_net._net.op.extend([param.initializer])
+
+    def create_param(self, param_name, shape, initializer, optimizer,
+                       ps_param=None):
+        with scope.NameScope(self.name, reset=True):
+            param = self.model.create_param(param_name=param_name,
+                                            shape=shape,
+                                            initializer=initializer,
+                                            optimizer=optimizer,
+                                            ps_param=ps_param)
+            self.params.append(param)
+            return param.parameter
+
+    def get_next_blob_reference(self, name):
+        with scope.NameScope(self.name, reset=True):
+            return self.model.net.NextScopedBlob(name)
 
     def add_operators(self, net, init_net=None,
                       context=InstantiationContext.TRAINING):

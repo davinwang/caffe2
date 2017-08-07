@@ -43,7 +43,7 @@ class SemiRandomFeatures(ArcCosineFeatureMap):
             model,
             input_record,
             output_dims,
-            s=0,
+            s=1,
             scale=None,
             weight_init=None,
             bias_init=None,
@@ -95,14 +95,12 @@ class SemiRandomFeatures(ArcCosineFeatureMap):
         )
 
         # Learned Parameters
-        self.learned_w = self.model.net.NextScopedBlob(self.name + "_learned_w")
-        self.learned_b = self.model.net.NextScopedBlob(self.name + "_learned_b")
-        self.params += self._initialize_params(self.learned_w,
-                                               self.learned_b,
-                                               w_init=weight_init,
-                                               b_init=bias_init,
-                                               w_optim=weight_optim,
-                                               b_optim=bias_optim)
+        (self.learned_w, self.learned_b) = self._initialize_params('learned_w',
+                                                                   'learned_b',
+                                                                   w_init=weight_init,
+                                                                   b_init=bias_init,
+                                                                   w_optim=weight_optim,
+                                                                   b_optim=bias_optim)
 
     def add_ops(self, net):
         # Learned features: wx + b
