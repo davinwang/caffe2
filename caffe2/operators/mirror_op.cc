@@ -1,96 +1,173 @@
 #include "caffe2/operators/mirror_op.h"
 
-#include "caffe2/utils/math.h"
-
 namespace caffe2 {
 
-template <>
-bool MirrorOp<float, CPUContext>::RunOnDevice() {
-  auto& X = Input(0);
-  auto* Y = Output(0);
-  Y->ResizeLike(X);
+#define COMPILE_TIME_MAX_MIRROR_DIMS 10
 
-#ifdef CAFFE2_USE_ACCELERATE
-  const float zero = 0.0f;
-  vDSP_vthres(X.data<float>(), 1, &zero, Y->mutable_data<float>(), 1, X.size());
-#else
-  EigenVectorMap<float>(Y->mutable_data<float>(), X.size()) =
-      ConstEigenVectorMap<float>(X.data<float>(), X.size()).cwiseMax(0.f);
-#endif
-  /* Naive implementation
-  const float* Xdata = X.data<float>();
-  float* Ydata = Y->mutable_data<float>();
-  for (int i = 0; i < X.size(); ++i) {
-    Ydata[i] = std::max(Xdata[i], 0.f);
-  }
-  */
-  return true;
-}
+	template <>
+	template <typename T>
+	bool MirrorOp<CPUContext>::DoRunWithType() {
+		const auto& input = Input(0);
+		auto* output = Output(0);
+		size_t count = input.size();
+		int num_axes = axes_.size();
+		const T* from_data = input.template data<T>();
+		T* to_data = output->template mutable_data<T>();
+		auto in_dims = input.dims();
+		auto out_dims = output->dims();
 
-template <>
-bool MirrorGradientOp<float, CPUContext>::RunOnDevice() {
-  auto& Y = Input(0);
-  auto& dY = Input(1);
-  auto* dX = Output(0);
-  DCHECK_EQ(dY.size(), Y.size());
-  dX->ResizeLike(Y);
+		// Measure amount of contiguous data we can copy at once
+		TIndex blocksize = 1;
+		int n_shared_idxs = 0;
+		for (int i = num_axes - 1; i >= 0; --i) {
+			if (axes_[i] == i) {
+				blocksize *= new_dims_[i];
+				++n_shared_idxs;
+			}
+			else {
+				break;
+			}
+		}
 
-  const float* Ydata = Y.data<float>();
-  const float* dYdata = dY.data<float>();
-  float* dXdata = dX->mutable_data<float>();
-  // TODO: proper vectorization with Eigen
-  EigenVectorArrayMap<float> dXvec(dXdata, dX->size());
-  ConstEigenVectorArrayMap<float> Yvec(Ydata, Y.size());
-  ConstEigenVectorArrayMap<float> dYvec(dYdata, dY.size());
-  dXvec = dYvec * Yvec.cwiseSign();
-  /* Previous implementation
-  for (int i = 0; i < Y.size(); ++i) {
-    dXdata[i] = Ydata[i] > 0 ? dYdata[i] : 0;
-  }
-  */
-  return true;
-}
+		if (num_axes < 2 || n_shared_idxs == num_axes) {
+			memcpy(to_data, from_data, count * sizeof(T));
+			return true;
+		}
 
-namespace {
-REGISTER_CPU_OPERATOR(Mirror, MirrorOp<float, CPUContext>);
-REGISTER_CPU_OPERATOR(MirrorGradient, MirrorGradientOp<float, CPUContext>);
+		int itr_axes = num_axes - n_shared_idxs;
 
-// Input: X, output: Y
-OPERATOR_SCHEMA(Mirror)
-  .NumInputs(1)
-  .NumOutputs(1)
-  .AllowInplace({{0, 0}})
-  .IdenticalTypeAndShape()
-  .SetDoc(R"DOC(
-Mirror takes one input data (Tensor<T>) and produces one output data
-(Tensor<T>) where the rectified linear function, y = max(0, x), is applied to
-the tensor elementwise.
+		// Calculate strides
+		TIndex stride_x[COMPILE_TIME_MAX_MIRROR_DIMS] = { 0 };
+		for (size_t i = 0; i < itr_axes; i++) {
+			stride_x[i] = 1;
+			for (size_t j = axes_[i] + 1; j < itr_axes; j++) {
+				stride_x[i] *= in_dims[j];
+			}
+		}
+
+		TIndex itr_idxs[COMPILE_TIME_MAX_MIRROR_DIMS] = { 0 };
+
+		// Branch here to avoid branching within the loop
+		if (blocksize > 1) {
+			for (size_t index = 0; index < (count / blocksize); index++) {
+				TIndex from_index = 0;
+				for (int i = 0; i < itr_axes; ++i) {
+					from_index += stride_x[i] * itr_idxs[i];
+				}
+
+				memcpy(
+					to_data + blocksize * index,
+					from_data + blocksize * from_index,
+					blocksize * sizeof(T));
+
+				++itr_idxs[itr_axes - 1];
+				for (int i = itr_axes - 1; i >= 1; --i) {
+					auto expected_dim = out_dims[i];
+					if (itr_idxs[i] < expected_dim) {
+						break;
+					}
+					itr_idxs[i] %= expected_dim;
+					++itr_idxs[i - 1];
+				}
+			}
+		}
+		else {
+			for (size_t index = 0; index < count; index++) {
+				TIndex from_index = 0;
+				for (int i = 0; i < itr_axes; ++i) {
+					from_index += stride_x[i] * itr_idxs[i];
+				}
+
+				*(to_data + index) = *(from_data + from_index);
+
+				++itr_idxs[itr_axes - 1];
+				for (int i = itr_axes - 1; i >= 1; --i) {
+					auto expected_dim = out_dims[i];
+					if (itr_idxs[i] < expected_dim) {
+						break;
+					}
+					itr_idxs[i] %= expected_dim;
+					++itr_idxs[i - 1];
+				}
+			}
+		}
+
+		return true;
+	}
+
+	namespace {
+		REGISTER_CPU_OPERATOR(Mirror, MirrorOp<CPUContext>);
+
+		OPERATOR_SCHEMA(Mirror)
+			.NumInputs(1)
+			.NumOutputs(1)
+			.TensorInferenceFunction([](
+				const OperatorDef& def,
+				const vector<TensorShape>& in) {
+			ArgumentHelper helper(def);
+			vector<int> axes = helper.GetRepeatedArgument<int>("axes");
+			vector<TensorShape> out(1);
+			out[0].set_data_type(in[0].data_type());
+
+			if (axes.empty()) {
+				for (auto axis = in[0].dims().rbegin(); axis != in[0].dims().rend();
+					++axis) {
+					out[0].add_dims(*axis);
+				}
+			}
+			else {
+				auto tensor_size = in[0].dims().size();
+				auto valid_axes =
+					std::all_of(axes.begin(), axes.end(), [&tensor_size](int& axis) {
+					return axis >= 0 && axis < tensor_size;
+				});
+
+				CAFFE_ENFORCE(valid_axes, "Axes argument passed in had invalid values");
+				CAFFE_ENFORCE(
+					axes.size() == tensor_size,
+					"Axes argument passed in had the incorrect size");
+
+				for (auto axis = axes.begin(); axis != axes.end(); ++axis) {
+					out[0].add_dims(in[0].dims().Get(*axis));
+				}
+			}
+
+			return out;
+		})
+			.SetDoc(R"DOC(
+Mirror the input tensor similar to numpy.mirror. For example, when
+axes=(1, 0, 2), given an input tensor of shape (1, 2, 3), the output shape
+will be (2, 1, 3).
 )DOC")
-  .Input(0, "X", "1D input tensor")
-  .Output(0, "Y", "1D input tensor");
+.Arg(
+	"axes",
+	"A list of integers. By default, reverse the dimensions, "
+	"otherwise permute the axes according to the values given.")
+			.Input(0, "data", "An input tensor.")
+			.Output(0, "mirrored", "Mirrored output.");
 
-// Input: Y, dY, output: dX
-OPERATOR_SCHEMA(MirrorGradient)
-    .NumInputs(2)
-    .NumOutputs(1)
-    .AllowInplace({{1, 0}})
-    .SetDoc(R"DOC(
-MirrorGradient takes both Y and dY and uses this to update dX according to the
-chain rule and derivatives of the rectified linear function.
-)DOC");
-
-class GetMirrorGradient : public GradientMakerBase {
-  using GradientMakerBase::GradientMakerBase;
-  vector<OperatorDef> GetGradientDefs() override {
-    return SingleGradientDef(
-        def_.type() + "Gradient",
-        "",
-        vector<string>{O(0), GO(0)},
-        vector<string>{GI(0)});
-  }
-};
-REGISTER_GRADIENT(Mirror, GetMirrorGradient);
-REGISTER_GRADIENT(MirrorFp16, GetMirrorGradient);
-
-}  // namespace
-}  // namespace caffe2
+		class GetMirrorGradient : public GradientMakerBase {
+			using GradientMakerBase::GradientMakerBase;
+			// We will create our own arguments.
+			bool CopyArguments() const override {
+				return false;
+			}
+			vector<OperatorDef> GetGradientDefs() override {
+				auto ops = SingleGradientDef(
+					"Mirror", "", vector<string>{GO(0)}, vector<string>{GI(0)});
+				ops[0].mutable_arg()->CopyFrom(Def().arg());
+				if (ArgumentHelper::HasArgument(Def(), "axes")) {
+					// If axes is specified, we will need to figure out the inverse index.
+					const Argument& old_axes = GetArgument(Def(), "axes");
+					const int axes_size = old_axes.ints_size();
+					Argument* new_arg = GetMutableArgument("axes", false, &ops[0]);
+					for (int i = 0; i < axes_size; ++i) {
+						new_arg->set_ints(old_axes.ints(i), i);
+					}
+				}
+				return ops;
+			}
+		};
+		REGISTER_GRADIENT(Mirror, GetMirrorGradient);
+	} // namespace
+} // namespace caffe2
