@@ -51,8 +51,6 @@ void UniqueOp<CPUContext>::DoRun() {
   }
 }
 
-namespace {
-
 REGISTER_CPU_OPERATOR(WallClockTime, WallClockTimeOp<CPUContext>);
 REGISTER_CPU_OPERATOR(Print, PrintOp<CPUContext>);
 REGISTER_CPU_OPERATOR(Flatten, FlattenOp<CPUContext>);
@@ -682,6 +680,8 @@ Example:
     .Arg("ends", "List of ending indices")
     .Output(0, "output", "Sliced data tensor.");
 
+OPERATOR_SCHEMA(SliceGradient);
+
 OPERATOR_SCHEMA(Squeeze)
     .NumInputs(1)
     .NumOutputs(1)
@@ -693,7 +693,25 @@ If the same blob is provided in input and output, the operation is copy-free.
 This is the exact inverse operation of ExpandDims given the same `dims` arg.
 )DOC")
     .Input(0, "data", "Tensors with at least max(dims) dimensions.")
-    .Output(0, "squeezed", "Reshaped tensor with same data as input.");
+    .Output(0, "squeezed", "Reshaped tensor with same data as input.")
+    .TensorInferenceFunction([](const OperatorDef& def,
+                                const vector<TensorShape>& in) {
+      ArgumentHelper helper(def);
+      auto dims = helper.template GetRepeatedArgument<int>("dims");
+      auto originalSize = dims.size();
+      std::sort(dims.begin(), dims.end());
+      dims.erase(std::unique(dims.begin(), dims.end()), dims.end());
+      if (dims.size() < originalSize) {
+        LOG(WARNING) << "Parameter `dims` has repeated dimensions.";
+      }
+      CAFFE_ENFORCE(dims.front() >= 0, "Dimension ids must be non-negative.");
+
+      vector<TensorShape> out(1);
+      std::vector<int> newDims =
+          SqueezeOp<CPUContext>::ComputeDims(GetDimsVector(in[0]), dims);
+      out[0] = CreateTensorShape(newDims, in[0].data_type());
+      return out;
+    });
 
 OPERATOR_SCHEMA(ExpandDims)
     .NumInputs(1)
@@ -1038,8 +1056,6 @@ REGISTER_GRADIENT(Slice, GetSliceGradient);
 SHOULD_NOT_DO_GRADIENT(GatherRangesOp);
 SHOULD_NOT_DO_GRADIENT(LengthsGather);
 SHOULD_NOT_DO_GRADIENT(AccumulateHistogram);
-
-} // namespace
 
 template <typename T, class Context>
 bool MaxOp<T, Context>::Compute() {
