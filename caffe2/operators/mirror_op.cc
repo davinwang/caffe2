@@ -1,12 +1,12 @@
-#include "caffe2/operators/mirror_op.h"
+#include "caffe2/operators/flip_op.h"
 
 namespace caffe2 {
 
-#define COMPILE_TIME_MAX_MIRROR_DIMS 10
+#define COMPILE_TIME_MAX_FLIP_DIMS 10
 
   template <>
   template <typename T>
-  bool MirrorOp<CPUContext>::DoRunWithType() {
+  bool FlipOp<CPUContext>::DoRunWithType() {
     const auto& input = Input(0);
     auto* output = Output(0);
     size_t count = input.size();
@@ -29,10 +29,10 @@ namespace caffe2 {
     TIndex stride = 1;
     for (int i = input.ndim() - 1; i >= 0; --i) {
       if (axes_[num_axes - 1] < i) {
-        blocksize *= in_dims_[i];
+        blocksize *= in_dims[i];
       }
       if (axes_[0] <= i) {
-        stride *= in_dims_[i];
+        stride *= in_dims[i];
       }
       else {
         break;
@@ -63,9 +63,9 @@ namespace caffe2 {
   }
 
   namespace {
-    REGISTER_CPU_OPERATOR(Mirror, MirrorOp<CPUContext>);
+    REGISTER_CPU_OPERATOR(Flip, FlipOp<CPUContext>);
 
-    OPERATOR_SCHEMA(Mirror)
+    OPERATOR_SCHEMA(Flip)
       .NumInputs(1)
       .NumOutputs(1)
       .TensorInferenceFunction([](
@@ -100,18 +100,18 @@ namespace caffe2 {
       return out;
     })
       .SetDoc(R"DOC(
-Mirror the input tensor similar to numpy.flip. For example, when axes=(3) or 
+Flip the input tensor similar to numpy.flip. For example, when axes=(3) or 
 None, given an input tensor M of shape (N, C, H, W), the output will be 
 similar as numpy.flip(M, 3) or numpy.fliplr(M).
 )DOC")
 .Arg(
   "axes",
-  "A list of integers. By default, mirror the last dimension, "
-  "otherwise mirror the axes according to the values given.")
+  "A list of integers. By default, flip the last dimension, "
+  "otherwise flip the axes according to the values given.")
       .Input(0, "data", "An input tensor.")
-      .Output(0, "mirrored", "Mirrored output.");
+      .Output(0, "flipped", "Flipped output.");
 
-    class GetMirrorGradient : public GradientMakerBase {
+    class GetFlipGradient : public GradientMakerBase {
       using GradientMakerBase::GradientMakerBase;
       // We will create our own arguments.
       bool CopyArguments() const override {
@@ -119,7 +119,7 @@ similar as numpy.flip(M, 3) or numpy.fliplr(M).
       }
       vector<OperatorDef> GetGradientDefs() override {
         auto ops = SingleGradientDef(
-          "Mirror", "", vector<string>{GO(0)}, vector<string>{GI(0)});
+          "Flip", "", vector<string>{GO(0)}, vector<string>{GI(0)});
         ops[0].mutable_arg()->CopyFrom(Def().arg());
         if (ArgumentHelper::HasArgument(Def(), "axes")) {
           // If axes is specified, we will need to figure out the inverse index.
@@ -133,6 +133,6 @@ similar as numpy.flip(M, 3) or numpy.fliplr(M).
         return ops;
       }
     };
-    REGISTER_GRADIENT(Mirror, GetMirrorGradient);
+    REGISTER_GRADIENT(Flip, GetFlipGradient);
   } // namespace
 } // namespace caffe2
