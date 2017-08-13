@@ -13,13 +13,13 @@ import numpy as np
 import unittest
 
 
-class TestMirror(hu.HypothesisTestCase):
+class TestFlip(hu.HypothesisTestCase):
 
     @given(X=hu.tensor(),
            engine=st.sampled_from(["", "CUDNN"]),
            **mu.gcs)
-    def test_mirror(self, X, gc, dc, engine):
-        op = core.CreateOperator("Mirror", ["X"], ["Y"], engine=engine)
+    def test_flip(self, X, gc, dc, engine):
+        op = core.CreateOperator("Flip", ["X"], ["Y"], engine=engine)
         # go away from the origin point to avoid kink problems
         X += 0.02 * np.sign(X)
         X[X == 0.0] += 0.02
