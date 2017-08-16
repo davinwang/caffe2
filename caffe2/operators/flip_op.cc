@@ -104,10 +104,10 @@ Flip the input tensor similar to numpy.flip. For example, when axes=(3) or
 None, given an input tensor M of shape (N, C, H, W), the output will be 
 similar as numpy.flip(M, 3) or numpy.fliplr(M).
 )DOC")
-.Arg(
-  "axes",
-  "A list of integers. By default, flip the last dimension, "
-  "otherwise flip the axes according to the values given.")
+      .Arg(
+        "axes",
+        "A list of integers. By default, flip the last dimension, "
+        "otherwise flip the axes according to the values given.")
       .Input(0, "data", "An input tensor.")
       .Output(0, "flipped", "Flipped output.");
 
