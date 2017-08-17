@@ -2,19 +2,20 @@
 
 namespace caffe2 {
 
-#define COMPILE_TIME_MAX_FLIP_DIMS 10
-
   template <>
   template <typename T>
   bool FlipOp<CPUContext>::DoRunWithType() {
     const auto& input = Input(0);
     auto* output = Output(0);
     size_t count = input.size();
+    CAFFE_ENFORCE(count==361, "count<>361");
     int num_axes = axes_.size();
+    CAFFE_ENFORCE(num_axes==1, "num_axes<>1");
     const T* from_data = input.template data<T>();
     T* to_data = output->template mutable_data<T>();
     auto in_dims = input.dims();
-    auto out_dims = in_dims;
+    CAFFE_ENFORCE(in_dims[0]==19, "in_dims[0]<>19");
+    CAFFE_ENFORCE(in_dims[1]==19, "in_dims[1]<>19");
 
     // Measure amount of contiguous data we can copy at once
     // Suppose input.dims()=(N,C,H,W),
@@ -38,6 +39,8 @@ namespace caffe2 {
         break;
       }
     }
+    CAFFE_ENFORCE(blocksize==1, "blocksize<>1");
+    CAFFE_ENFORCE(stride==19, "stride<>19");
 
     // Now, for every stride, reverse data in blocksize
     // Branch here to avoid branching within the loop

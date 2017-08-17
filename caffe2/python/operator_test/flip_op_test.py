@@ -15,16 +15,19 @@ import unittest
 
 class TestFlip(hu.HypothesisTestCase):
 
-    @given(X=hu.tensor(),
-           engine=st.sampled_from(["", "CUDNN"]),
-           **mu.gcs)
-    def test_flip(self, X, gc, dc, engine):
-        op = core.CreateOperator("Flip", ["X"], ["Y"], engine=engine)
-        # go away from the origin point to avoid kink problems
-        X += 0.02 * np.sign(X)
-        X[X == 0.0] += 0.02
-        self.assertDeviceChecks(dc, op, [X], [0])
-        self.assertGradientChecks(gc, op, [X], 0, [0])
+    @given(H=st.sampled_from([19]),
+           W=st.sampled_from([19]),
+           engine=st.sampled_from([None, "CUDNN"]),
+           **hu.gcs)
+    def test_flip(self, H, W, engine, gc, dc):
+        X = np.random.rand(H, W).astype(np.float32)
+        op = core.CreateOperator("Flip", ["X"], ["Y"], axes=(1), engine=engine)
+        self.assertReferenceChecks(
+            device_option=gc,
+            op=op,
+            inputs=[X],
+            reference=np.flip,
+        )
 
 
 if __name__ == "__main__":
