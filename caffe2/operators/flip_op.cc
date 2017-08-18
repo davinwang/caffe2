@@ -29,7 +29,7 @@ namespace caffe2 {
       if (axes_[num_axes - 1] < i) {
         blocksize *= in_dims[i];
       }
-      elseif (axes_[0] <= i) {
+      else if (axes_[0] <= i) {
         stride *= in_dims[i];
       }
       else {
