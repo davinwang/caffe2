@@ -9,6 +9,7 @@ namespace caffe2 {
     auto* output = Output(0);
     size_t count = input.size();
     int num_axes = axes_.size();
+    CAFFE_ENFORCE(OperatorBase::HasArgument("axes"), "argument axes is missing");
     const T* from_data = input.template data<T>();
     T* to_data = output->template mutable_data<T>();
     auto in_dims = input.dims();
