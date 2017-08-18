@@ -2,8 +2,6 @@
 
 namespace caffe2 {
 
-#define COMPILE_TIME_MAX_FLIP_DIMS 10
-
   template <>
   template <typename T>
   bool FlipOp<CPUContext>::DoRunWithType() {
@@ -11,27 +9,27 @@ namespace caffe2 {
     auto* output = Output(0);
     size_t count = input.size();
     int num_axes = axes_.size();
+    CAFFE_ENFORCE(OperatorBase::HasArgument("axes"), "argument axes is missing");
     const T* from_data = input.template data<T>();
     T* to_data = output->template mutable_data<T>();
     auto in_dims = input.dims();
-    auto out_dims = in_dims;
 
     // Measure amount of contiguous data we can copy at once
     // Suppose input.dims()=(N,C,H,W),
-    //   if axes=(1) or (0,1) then blocksize = H * W
-    //   if axes=(2) or (1,2) or (0,1,2) then blocksize = W
-    //   if axes=(3) or (..,3) then blocksize = 1
+    //   if axes=(1,) or (0,1) then blocksize = H * W
+    //   if axes=(2,) or (1,2) or (0,1,2) then blocksize = W
+    //   if axes=(3,) or (2,3) or (1,2,3) or (0,1,2,3) then blocksize = 1
     // Calculate stride
-    //   if axes=(1) or (1,2) or (1,2,3) then stride = C * H * W
-    //   if axes=(2) or (2,3) then stride = H * W
-    //   if axes=(3) then stride = W
+    //   if axes=(1,) or (1,2) or (1,2,3) then stride = C * H * W
+    //   if axes=(2,) or (2,3) then stride = H * W
+    //   if axes=(3,) then stride = W
     TIndex blocksize = 1;
     TIndex stride = 1;
     for (int i = input.ndim() - 1; i >= 0; --i) {
       if (axes_[num_axes - 1] < i) {
         blocksize *= in_dims[i];
       }
-      if (axes_[0] <= i) {
+      else if (axes_[0] <= i) {
         stride *= in_dims[i];
       }
       else {
@@ -43,10 +41,10 @@ namespace caffe2 {
     // Branch here to avoid branching within the loop
     if (blocksize > 1) {
       for (size_t index = 0; index < count; index += stride) {
-        for (size_t i = 0; i < stride; i += blocksize) {
+        for (size_t i = 0; i < stride; i++) {
           memcpy(
             to_data + blocksize * (index + i),
-            from_data + blocksize * (index + stride -i),
+            from_data + blocksize * (index + stride - 1 - i),
             blocksize * sizeof(T));
         }
       }
@@ -54,7 +52,7 @@ namespace caffe2 {
     else {
       for (size_t index = 0; index < count; index += stride) {
         for (size_t i = 0; i < stride; i++) {
-          *(to_data + index + i) = *(from_data + index + stride -i);
+          *(to_data + index + i) = *(from_data + index + stride - 1 - i);
         }
       }
     }
@@ -89,7 +87,7 @@ namespace caffe2 {
 
         CAFFE_ENFORCE(valid_axes, "Axes argument passed in had invalid values");
         CAFFE_ENFORCE(
-          axes.size() == tensor_size,
+          axes.size() <= tensor_size,
           "Axes argument passed in had the incorrect size");
 
         for (auto axis = axes.begin(); axis != axes.end(); ++axis) {
@@ -100,7 +98,7 @@ namespace caffe2 {
       return out;
     })
       .SetDoc(R"DOC(
-Flip the input tensor similar to numpy.flip. For example, when axes=(3) or 
+Flip the input tensor similar to numpy.flip. For example, when axes=(3,) or 
 None, given an input tensor M of shape (N, C, H, W), the output will be 
 similar as numpy.flip(M, 3) or numpy.fliplr(M).
 )DOC")
