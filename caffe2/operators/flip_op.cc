@@ -9,19 +9,16 @@ namespace caffe2 {
     const auto& input = Input(0);
     auto* output = Output(0);
     size_t count = input.size();
-    CAFFE_ENFORCE(count==361, "count<>361");
     int num_axes = axes_.size();
     CAFFE_ENFORCE(OperatorBase::HasArgument("axes"), "argument axes is missing");
-    CAFFE_ENFORCE(num_axes==1, "num_axes<>1 actual:", num_axes);
     const T* from_data = input.template data<T>();
     T* to_data = output->template mutable_data<T>();
     auto in_dims = input.dims();
-    CAFFE_ENFORCE(in_dims[0]==19, "in_dims[0]<>19");
-    CAFFE_ENFORCE(in_dims[1]==19, "in_dims[1]<>19");
 
     // Measure amount of contiguous data we can copy at once
     // Suppose input.dims()=(N,C,H,W),
     //   if axes=(1) or (0,1) then blocksize = H * W
+
     //   if axes=(2) or (1,2) or (0,1,2) then blocksize = W
     //   if axes=(3) or (..,3) then blocksize = 1
     // Calculate stride
@@ -41,13 +38,10 @@ namespace caffe2 {
         break;
       }
     }
-    CAFFE_ENFORCE(blocksize==1, "blocksize<>1");
-    CAFFE_ENFORCE(stride==19, "stride<>19");
 
     // Now, for every stride, reverse data in blocksize
     // Branch here to avoid branching within the loop
-    if (blocksize > 1) {
-      for (size_t index = 0; index < count; index += stride) {
+    if (blocksize > 1) {      for (size_t index = 0; index < count; index += stride) {
         for (size_t i = 0; i < stride; i += blocksize) {
           memcpy(
             to_data + blocksize * (index + i),
@@ -94,7 +88,7 @@ namespace caffe2 {
 
         CAFFE_ENFORCE(valid_axes, "Axes argument passed in had invalid values");
         CAFFE_ENFORCE(
-          axes.size() == tensor_size,
+          axes.size() <= tensor_size,
           "Axes argument passed in had the incorrect size");
 
         for (auto axis = axes.begin(); axis != axes.end(); ++axis) {
