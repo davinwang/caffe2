@@ -29,7 +29,7 @@ namespace caffe2 {
       if (axes_[num_axes - 1] < i) {
         blocksize *= in_dims[i];
       }
-      if (axes_[0] <= i) {
+      elseif (axes_[0] <= i) {
         stride *= in_dims[i];
       }
       else {
@@ -41,7 +41,7 @@ namespace caffe2 {
     // Branch here to avoid branching within the loop
     if (blocksize > 1) {
       for (size_t index = 0; index < count; index += stride) {
-        for (size_t i = 0; i < stride; i += blocksize) {
+        for (size_t i = 0; i < stride; i++) {
           memcpy(
             to_data + blocksize * (index + i),
             from_data + blocksize * (index + stride - 1 - i),
