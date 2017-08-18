@@ -1,3 +1,4 @@
+
 #include "caffe2/operators/flip_op.h"
 
 namespace caffe2 {
@@ -10,7 +11,8 @@ namespace caffe2 {
     size_t count = input.size();
     CAFFE_ENFORCE(count==361, "count<>361");
     int num_axes = axes_.size();
-    CAFFE_ENFORCE(num_axes==1, "num_axes<>1");
+    CAFFE_ENFORCE(OperatorBase::HasArgument("axes"), "argument axes is missing");
+    CAFFE_ENFORCE(num_axes==1, "num_axes<>1 actual:", num_axes);
     const T* from_data = input.template data<T>();
     T* to_data = output->template mutable_data<T>();
     auto in_dims = input.dims();
