@@ -44,7 +44,7 @@ namespace caffe2 {
         for (size_t i = 0; i < stride; i += blocksize) {
           memcpy(
             to_data + blocksize * (index + i),
-            from_data + blocksize * (index + stride -i),
+            from_data + blocksize * (index + stride - 1 - i),
             blocksize * sizeof(T));
         }
       }
@@ -52,7 +52,7 @@ namespace caffe2 {
     else {
       for (size_t index = 0; index < count; index += stride) {
         for (size_t i = 0; i < stride; i++) {
-          *(to_data + index + i) = *(from_data + index + stride -i);
+          *(to_data + index + i) = *(from_data + index + stride - 1 - i);
         }
       }
     }
