@@ -20,8 +20,8 @@ namespace caffe2 {
     //   if axes=(2,) or (1,2) or (0,1,2) then blocksize = W
     //   if axes=(3,) or (2,3) or (1,2,3) or (0,1,2,3) then blocksize = 1
     // Calculate stride
-    //   if axes=(1,) or (1,2) or (1,2,3) then stride = C * H * W
-    //   if axes=(2,) or (2,3) then stride = H * W
+    //   if axes=(1,) or (1,2) or (1,2,3) then stride = C or C * H or C * H * W
+    //   if axes=(2,) or (2,3) then stride = H or H * W
     //   if axes=(3,) then stride = W
     TIndex blocksize = 1;
     TIndex stride = 1;
@@ -66,37 +66,7 @@ namespace caffe2 {
     OPERATOR_SCHEMA(Flip)
       .NumInputs(1)
       .NumOutputs(1)
-      .TensorInferenceFunction([](
-        const OperatorDef& def,
-        const vector<TensorShape>& in) {
-      ArgumentHelper helper(def);
-      vector<int> axes = helper.GetRepeatedArgument<int>("axes");
-      vector<TensorShape> out(1);
-      out[0].set_data_type(in[0].data_type());
-
-      if (axes.empty()) {
-        auto axis = in[0].dims().rend() - 1;
-        out[0].add_dims(*axis);
-      }
-      else {
-        auto tensor_size = in[0].dims().size();
-        auto valid_axes =
-          std::all_of(axes.begin(), axes.end(), [&tensor_size](int& axis) {
-          return axis >= 0 && axis < tensor_size;
-        });
-
-        CAFFE_ENFORCE(valid_axes, "Axes argument passed in had invalid values");
-        CAFFE_ENFORCE(
-          axes.size() <= tensor_size,
-          "Axes argument passed in had the incorrect size");
-
-        for (auto axis = axes.begin(); axis != axes.end(); ++axis) {
-          out[0].add_dims(in[0].dims().Get(*axis));
-        }
-      }
-
-      return out;
-    })
+      .IdenticalTypeAndShapeOfInput(1)
       .SetDoc(R"DOC(
 Flip the input tensor similar to numpy.flip. For example, when axes=(3,) or 
 None, given an input tensor M of shape (N, C, H, W), the output will be 
@@ -111,10 +81,6 @@ similar as numpy.flip(M, 3) or numpy.fliplr(M).
 
     class GetFlipGradient : public GradientMakerBase {
       using GradientMakerBase::GradientMakerBase;
-      // We will create our own arguments.
-      bool CopyArguments() const override {
-        return false;
-      }
       vector<OperatorDef> GetGradientDefs() override {
         auto ops = SingleGradientDef(
           "Flip", "", vector<string>{GO(0)}, vector<string>{GI(0)});

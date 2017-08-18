@@ -14,11 +14,11 @@ namespace caffe2 {
     FlipOp(const OperatorDef& operator_def, Workspace* ws)
       : Operator<Context>(operator_def, ws),
       axes_(OperatorBase::GetRepeatedArgument<int>("axes")) {
+      // 
+      CAFFE_ENFORCE(OperatorBase::HasArgument("axes"), "Argument `axes` is missing");
       // We will check the legality of axes_: it should be monotone increasing tuple between 0 and X.ndim().
       for (int i = 1; i < axes_.size(); ++i) {
-        if (axes_[i] != axes_[0] + i) {
-          CAFFE_THROW("Axes should be a monotone increasing tuple between 0 and ndim.");
-        }
+        CAFFE_ENFORCE(axes_[i] == axes_[0] + i, "Argument `axes` has invalid dimension:", axes_[i]);
       }
     }
     ~FlipOp() {}
