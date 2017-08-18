@@ -1,4 +1,3 @@
-
 #include "caffe2/operators/flip_op.h"
 
 namespace caffe2 {
@@ -17,14 +16,13 @@ namespace caffe2 {
 
     // Measure amount of contiguous data we can copy at once
     // Suppose input.dims()=(N,C,H,W),
-    //   if axes=(1) or (0,1) then blocksize = H * W
-
-    //   if axes=(2) or (1,2) or (0,1,2) then blocksize = W
-    //   if axes=(3) or (..,3) then blocksize = 1
+    //   if axes=(1,) or (0,1) then blocksize = H * W
+    //   if axes=(2,) or (1,2) or (0,1,2) then blocksize = W
+    //   if axes=(3,) or (2,3) or (1,2,3) or (0,1,2,3) then blocksize = 1
     // Calculate stride
-    //   if axes=(1) or (1,2) or (1,2,3) then stride = C * H * W
-    //   if axes=(2) or (2,3) then stride = H * W
-    //   if axes=(3) then stride = W
+    //   if axes=(1,) or (1,2) or (1,2,3) then stride = C * H * W
+    //   if axes=(2,) or (2,3) then stride = H * W
+    //   if axes=(3,) then stride = W
     TIndex blocksize = 1;
     TIndex stride = 1;
     for (int i = input.ndim() - 1; i >= 0; --i) {
@@ -100,7 +98,7 @@ namespace caffe2 {
       return out;
     })
       .SetDoc(R"DOC(
-Flip the input tensor similar to numpy.flip. For example, when axes=(3) or 
+Flip the input tensor similar to numpy.flip. For example, when axes=(3,) or 
 None, given an input tensor M of shape (N, C, H, W), the output will be 
 similar as numpy.flip(M, 3) or numpy.fliplr(M).
 )DOC")
