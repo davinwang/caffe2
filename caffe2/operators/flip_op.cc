@@ -41,7 +41,8 @@ namespace caffe2 {
 
     // Now, for every stride, reverse data in blocksize
     // Branch here to avoid branching within the loop
-    if (blocksize > 1) {      for (size_t index = 0; index < count; index += stride) {
+    if (blocksize > 1) {
+      for (size_t index = 0; index < count; index += stride) {
         for (size_t i = 0; i < stride; i += blocksize) {
           memcpy(
             to_data + blocksize * (index + i),
