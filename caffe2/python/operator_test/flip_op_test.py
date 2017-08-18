@@ -21,13 +21,16 @@ class TestFlip(hu.HypothesisTestCase):
     def test_flip(self, H, W, engine, gc, dc):
         X = np.random.rand(H, W).astype(np.float32)
         op = core.CreateOperator("Flip", ["X"], ["Y"], axes=(1,), engine=engine)
+        
+        def ref_flip(X):
+            return [np.fliplr(X)]
+        
         self.assertReferenceChecks(
             device_option=gc,
             op=op,
             inputs=[X],
-            reference=np.fliplr,
+            reference=ref_flip,
         )
-
 
 if __name__ == "__main__":
     unittest.main()
