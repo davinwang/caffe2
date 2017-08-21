@@ -24,7 +24,7 @@ namespace caffe2 {
       for (int i = 1; i < axes_.size(); ++i) {
         CAFFE_ENFORCE(axes_[i] == axes_[0] + i, "Argument `axes` has invalid dimension:", axes_[i]);
       }
-      CAFFE_ENFORCE(axes_[axes_.size()-1] < X.ndim(), "Argument `axes` has invalid dimension:", axes_[axes_.size()-1]);
+      //CAFFE_ENFORCE(axes_[axes_.size()-1] < X.ndim(), "Argument `axes` has invalid dimension:", axes_[axes_.size()-1]);
     }
     ~FlipOp() {}
 

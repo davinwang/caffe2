@@ -8,48 +8,95 @@ from hypothesis import given
 import hypothesis.strategies as st
 import caffe2.python.hypothesis_test_util as hu
 import numpy as np
+from caffe2.proto import caffe2_pb2
 
 import unittest
 
 
 class TestFlip(hu.HypothesisTestCase):
 
-    @given(H=st.sampled_from([1,3,8]),
-           W=st.sampled_from([2,5,11]),
-           engine=st.sampled_from([None]),
+    @given(N=st.sampled_from([2,3]),
+           C=st.sampled_from([3,5]),
+           H=st.sampled_from([5,8]),
+           W=st.sampled_from([8,13]),
+           engine=st.sampled_from([None]), # CPU only by now
            **hu.gcs)
-    def test_flip(self, H, W, engine, gc, dc):
-        X = np.random.rand(H, W).astype(np.float32)
+    def test_flip(self, N, C, H, W, engine, gc, dc):
+        X = np.random.rand(N, C, H, W).astype(np.float32)
 
-        # test1: compare with numpy.fliplr
-        op = core.CreateOperator("Flip", ["X"], ["Y"], axes=(1,), engine=engine)
+        op = core.CreateOperator("Flip", ["X"], ["Y"], axes=(3,), engine=engine)
         
         def ref_fliplr(X):
-            return [np.fliplr(X)]
+            return [np.flip(X, 3)]
 
         self.assertReferenceChecks(
-            device_option=gc,
+            device_option=core.DeviceOption(caffe2_pb2.CPU, 0), # CPU only by now
             op=op,
             inputs=[X],
             reference=ref_fliplr,
         )
 
-    @given(H=st.sampled_from([1,3,8]),
-           W=st.sampled_from([2,5,11]),
-           engine=st.sampled_from([None]),
+    @given(N=st.sampled_from([2,3]),
+           C=st.sampled_from([3,5]),
+           H=st.sampled_from([5,8]),
+           W=st.sampled_from([8,13]),
+           engine=st.sampled_from([None]), # CPU only by now
            **hu.gcs)
-    def test_flip(self, H, W, engine, gc, dc):
-        X = np.random.rand(H, W).astype(np.float32)
+    def test_flip2(self, N, C, H, W, engine, gc, dc):
+        X = np.random.rand(N, C, H, W).astype(np.float32)
 
-        # test2: compare with numpy.flipud
-        op = core.CreateOperator("Flip", ["X"], ["Y"], axes=(0,), engine=engine)
+        op = core.CreateOperator("Flip", ["X"], ["Y"], axes=(2,), engine=engine)
 
 
         def ref_flipud(X):
-            return [np.flipud(X)]
+            return [np.flip(X, 2)]
 
         self.assertReferenceChecks(
-            device_option=gc,
+            device_option=core.DeviceOption(caffe2_pb2.CPU, 0), # CPU only by now
+            op=op,
+            inputs=[X],
+            reference=ref_flipud,
+        )
+
+    @given(N=st.sampled_from([2,3]),
+           C=st.sampled_from([3,5]),
+           H=st.sampled_from([5,8]),
+           W=st.sampled_from([8,13]),
+           engine=st.sampled_from([None]), # CPU only by now
+           **hu.gcs)
+    def test_flip3(self, N, C, H, W, engine, gc, dc):
+        X = np.random.rand(N, C, H, W).astype(np.float32)
+
+        op = core.CreateOperator("Flip", ["X"], ["Y"], axes=(2,3), engine=engine)
+
+
+        def ref_flipud(X):
+            return [np.flip(np.flip(X, 3), 2)]
+
+        self.assertReferenceChecks(
+            device_option=core.DeviceOption(caffe2_pb2.CPU, 0), # CPU only by now
+            op=op,
+            inputs=[X],
+            reference=ref_flipud,
+        )
+
+    @given(N=st.sampled_from([2,3]),
+           C=st.sampled_from([3,5]),
+           H=st.sampled_from([5,8]),
+           W=st.sampled_from([8,13]),
+           engine=st.sampled_from([None]), # CPU only by now
+           **hu.gcs)
+    def test_flip4(self, N, C, H, W, engine, gc, dc):
+        X = np.random.rand(N, C, H, W).astype(np.float32)
+
+        op = core.CreateOperator("Flip", ["X"], ["Y"], axes=(0,1,2), engine=engine)
+
+
+        def ref_flipud(X):
+            return [np.flip(np.flip(np.flip(X, 2), 1), 0)]
+
+        self.assertReferenceChecks(
+            device_option=core.DeviceOption(caffe2_pb2.CPU, 0), # CPU only by now
             op=op,
             inputs=[X],
             reference=ref_flipud,
