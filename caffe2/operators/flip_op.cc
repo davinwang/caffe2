@@ -40,7 +40,7 @@ namespace caffe2 {
     // Now, for every stride, reverse data in blocksize
     // Branch here to avoid branching within the loop
     if (blocksize > 1) {
-      for (size_t index = 0; index < count; index += stride) {
+      for (size_t index = 0; index < (count / blocksize); index += stride) {
         for (size_t i = 0; i < stride; i++) {
           memcpy(
             to_data + blocksize * (index + i),
@@ -70,8 +70,8 @@ namespace caffe2 {
       .SetDoc(R"DOC(
 Flip the input tensor similar to numpy.flip. For example, when axes=(3,), 
 given an input tensor M of shape (N, C, H, W), the output will be 
-similar as numpy.flip(M, 3) or numpy.fliplr(M). And when axes=(2,), the
-output will be similar as numpy.flip(M, 2) or numpy.flipud(M).
+similar as numpy.flip(M, 3). And when axes=(2,), the output will be
+similar as numpy.flip(M, 2).
 )DOC")
       .Arg(
         "axes",
