@@ -66,7 +66,7 @@ namespace caffe2 {
     OPERATOR_SCHEMA(Flip)
       .NumInputs(1)
       .NumOutputs(1)
-      .IdenticalTypeAndShapeOfInput(1)
+      .IdenticalTypeAndShapeOfInput(0)
       .SetDoc(R"DOC(
 Flip the input tensor similar to numpy.flip. For example, when axes=(3,) or 
 None, given an input tensor M of shape (N, C, H, W), the output will be 
@@ -85,15 +85,6 @@ similar as numpy.flip(M, 3) or numpy.fliplr(M).
         auto ops = SingleGradientDef(
           "Flip", "", vector<string>{GO(0)}, vector<string>{GI(0)});
         ops[0].mutable_arg()->CopyFrom(Def().arg());
-        if (ArgumentHelper::HasArgument(Def(), "axes")) {
-          // If axes is specified, we will need to figure out the inverse index.
-          const Argument& old_axes = GetArgument(Def(), "axes");
-          const int axes_size = old_axes.ints_size();
-          Argument* new_arg = GetMutableArgument("axes", false, &ops[0]);
-          for (int i = 0; i < axes_size; ++i) {
-            new_arg->set_ints(old_axes.ints(i), i);
-          }
-        }
         return ops;
       }
     };
