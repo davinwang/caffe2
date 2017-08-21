@@ -22,21 +22,27 @@ class TestFlip(hu.HypothesisTestCase):
         X = np.random.rand(H, W).astype(np.float32)
 
         # test1: compare with numpy.fliplr
-        op1 = core.CreateOperator("Flip", ["X"], ["Y"], axes=(1,), engine=engine)
+        op = core.CreateOperator("Flip", ["X"], ["Y"], axes=(1,), engine=engine)
         
         def ref_fliplr(X):
             return [np.fliplr(X)]
 
-        
         self.assertReferenceChecks(
             device_option=gc,
-            op=op1,
+            op=op,
             inputs=[X],
             reference=ref_fliplr,
         )
 
+    @given(H=st.sampled_from([1,3,8]),
+           W=st.sampled_from([2,5,11]),
+           engine=st.sampled_from([None]),
+           **hu.gcs)
+    def test_flip(self, H, W, engine, gc, dc):
+        X = np.random.rand(H, W).astype(np.float32)
+
         # test2: compare with numpy.flipud
-        op2 = core.CreateOperator("Flip", ["X"], ["Y"], axes=(0,), engine=engine)
+        op = core.CreateOperator("Flip", ["X"], ["Y"], axes=(0,), engine=engine)
 
 
         def ref_flipud(X):
@@ -44,7 +50,7 @@ class TestFlip(hu.HypothesisTestCase):
 
         self.assertReferenceChecks(
             device_option=gc,
-            op=op2,
+            op=op,
             inputs=[X],
             reference=ref_flipud,
         )
