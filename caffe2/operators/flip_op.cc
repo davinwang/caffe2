@@ -68,16 +68,17 @@ namespace caffe2 {
       .NumOutputs(1)
       .IdenticalTypeAndShapeOfInput(0)
       .SetDoc(R"DOC(
-Flip the input tensor similar to numpy.flip. For example, when axes=(3,) or 
-None, given an input tensor M of shape (N, C, H, W), the output will be 
-similar as numpy.flip(M, 3) or numpy.fliplr(M).
+Flip the input tensor similar to numpy.flip. For example, when axes=(3,), 
+given an input tensor M of shape (N, C, H, W), the output will be 
+similar as numpy.flip(M, 3) or numpy.fliplr(M). And when axes=(2,), the
+output will be similar as numpy.flip(M, 2) or numpy.flipud(M).
 )DOC")
       .Arg(
         "axes",
-        "A list of integers. By default, flip the last dimension, "
-        "otherwise flip the axes according to the values given.")
+        "A list of integers. Mandatory."
+        "Flip the axes according to the values given.")
       .Input(0, "data", "An input tensor.")
-      .Output(0, "flipped", "Flipped output.");
+      .Output(0, "flipped", "Flipped output tensor.");
 
     class GetFlipGradient : public GradientMakerBase {
       using GradientMakerBase::GradientMakerBase;

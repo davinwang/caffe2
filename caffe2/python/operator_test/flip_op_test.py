@@ -20,16 +20,33 @@ class TestFlip(hu.HypothesisTestCase):
            **hu.gcs)
     def test_flip(self, H, W, engine, gc, dc):
         X = np.random.rand(H, W).astype(np.float32)
-        op = core.CreateOperator("Flip", ["X"], ["Y"], axes=(1,), engine=engine)
+
+        # test1: compare with numpy.fliplr
+        op1 = core.CreateOperator("Flip", ["X"], ["Y"], axes=(1,), engine=engine)
         
-        def ref_flip(X):
+        def ref_fliplr(X):
             return [np.fliplr(X)]
+
         
         self.assertReferenceChecks(
             device_option=gc,
-            op=op,
+            op=op1,
             inputs=[X],
-            reference=ref_flip,
+            reference=ref_fliplr,
+        )
+
+        # test2: compare with numpy.flipud
+        op2 = core.CreateOperator("Flip", ["X"], ["Y"], axes=(0,), engine=engine)
+
+
+        def ref_flipud(X):
+            return [np.flipud(X)]
+
+        self.assertReferenceChecks(
+            device_option=gc,
+            op=op2,
+            inputs=[X],
+            reference=ref_flipud,
         )
 
 if __name__ == "__main__":

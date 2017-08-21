@@ -14,12 +14,17 @@ namespace caffe2 {
     FlipOp(const OperatorDef& operator_def, Workspace* ws)
       : Operator<Context>(operator_def, ws),
       axes_(OperatorBase::GetRepeatedArgument<int>("axes")) {
-      // 
+      // We will check the legality of axes_: it should be continuous and
+      // monotonous increasing between 0 and X.ndim().
+      // legal: (1,), (2,3) and (0,1,2)
+      // illegal: (-1,0,1), (1,3) and (4,) when only 4 dimension
       CAFFE_ENFORCE(OperatorBase::HasArgument("axes"), "Argument `axes` is missing");
-      // We will check the legality of axes_: it should be monotone increasing tuple between 0 and X.ndim().
+      CAFFE_ENFORCE(axes_.size() > 0, "Argument `axes` is missing");
+      CAFFE_ENFORCE(axes_[0] >= 0, "Argument `axes` has invalid dimension:", axes_[0]);
       for (int i = 1; i < axes_.size(); ++i) {
         CAFFE_ENFORCE(axes_[i] == axes_[0] + i, "Argument `axes` has invalid dimension:", axes_[i]);
       }
+      CAFFE_ENFORCE(axes_[axes_.size()-1] < X.ndim(), "Argument `axes` has invalid dimension:", axes_[axes_.size()-1]);
     }
     ~FlipOp() {}
 
@@ -37,10 +42,6 @@ namespace caffe2 {
     bool DoRunWithType();
 
     std::vector<int> axes_;
-    // buffer_ is used in FlipOp<CUDAContext> so we can obtain a consistent
-    // buffer on the GPU. It is not used in the CPUContext implementation.
-    Tensor<Context> buffer_;
-    TensorCPU buffer_cpu_;
   };
 
 } // namespace caffe2
