@@ -1291,6 +1291,7 @@ def _InferBlobDevice(model):
                     step_proto = caffe2_pb2.NetDef()
                     protobuftx.Merge(step_arg.s.decode("ascii"), step_proto)
                     map_ops(step_proto)
+    map_ops(model.param_init_net.Proto())
     map_ops(model.net.Proto())
     model._blob_to_device = mapping
 
@@ -1424,16 +1425,19 @@ def OptimizeGradientMemory(model,
                    that you will access externally.
     recycle_activations: whether to also recycle forward pass activations
     """
-    input_shapes_all_devices = {}
-    for b, shp in viewitems(input_shapes):
-        for d in model._devices:
-            input_shapes_all_devices["{}_{}/{}".
-                                     format(model._device_prefix, d, b)] = shp
+    if input_shapes is not None:
+        input_shapes_all_devices = {}
+        for b, shp in viewitems(input_shapes):
+            for d in model._devices:
+                input_shapes_all_devices["{}_{}/{}".
+                                         format(model._device_prefix, d, b)] = shp
 
-    (shapes, types) = workspace.InferShapesAndTypes(
-        [model.param_init_net, model.net],
-        input_shapes_all_devices,
-    )
+        (shapes, types) = workspace.InferShapesAndTypes(
+            [model.param_init_net, model.net],
+            input_shapes_all_devices,
+        )
+    else:
+        shapes = None
 
     for device in model._devices:
         namescope = "{}_{}/".format(model._device_prefix, device)

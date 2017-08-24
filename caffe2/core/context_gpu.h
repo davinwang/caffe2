@@ -15,8 +15,7 @@ namespace caffe2 {
 
 enum class CudaMemoryPoolType {
   NONE = 0,
-  CNMEM = 1,
-  CUB = 2,
+  CUB = 1,
 };
 
 /**
@@ -25,7 +24,6 @@ enum class CudaMemoryPoolType {
  * The memory pool is set up during caffe2's global initialization time.
  */
 CudaMemoryPoolType GetCudaMemoryPoolType();
-
 
 /**
  * A struct to host thread-local cuda objects.
@@ -117,6 +115,15 @@ class CUDAContext final {
     SwitchToDevice(0);
   }
 
+  inline void WaitEvent(const Event& ev) {
+    ev.Wait(CUDA, this);
+  }
+
+  inline void Record(Event* ev) const {
+    CAFFE_ENFORCE(ev, "Event must not be null.");
+    ev->Record(CUDA, this);
+  }
+
   void FinishDeviceComputation() {
     cudaStreamSynchronize(cuda_objects_.GetStream(gpu_id_, stream_id_));
     cudaError_t error = cudaGetLastError();
@@ -192,12 +199,11 @@ class CUDAContext final {
     CopyBytes<SrcContext, DstContext>(n * meta.itemsize(), src, dst);
   }
 
+ protected:
+  static void Delete(void* data);
   void set_stream_id(int stream_id) {
     stream_id_ = stream_id;
   }
-
- protected:
-  static void Delete(void* data);
 
   int gpu_id_;
   int stream_id_ = 0;
