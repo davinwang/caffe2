@@ -11,6 +11,7 @@ import caffe2.python.hypothesis_test_util as hu
 from future.utils import viewvalues
 import hypothesis.strategies as st
 from hypothesis import given, settings
+import unittest
 
 
 def has_blob(proto, needle):
@@ -222,6 +223,7 @@ class MemongerTest(hu.HypothesisTestCase):
         np.testing.assert_almost_equal(loss, optimized_loss)
         np.testing.assert_almost_equal(grad, optimized_grad)
 
+    @unittest.skipIf(not workspace.has_gpu_support, "No gpu support.")
     def test_memonger_mix_cpu_gpu(self):
         '''
         Check that memonger does not make blobs cross CPU/GPU boundary
@@ -451,6 +453,63 @@ class MemongerTest(hu.HypothesisTestCase):
         np.testing.assert_almost_equal(loss1, optimized_loss1)
         np.testing.assert_almost_equal(loss2, optimized_loss2)
 
+    def test_rnn(self):
+        from caffe2.python import rnn_cell
+        T = 5
+        model = model_helper.ModelHelper()
+        seq_lengths, labels = \
+            model.net.AddExternalInputs(
+                'seq_lengths', 'labels',
+            )
+        init_blobs = []
+        for i in range(2):
+            hidden_init, cell_init = model.net.AddExternalInputs(
+                "hidden_init_{}".format(i),
+                "cell_init_{}".format(i)
+            )
+            init_blobs.extend([hidden_init, cell_init])
+        model.param_init_net.ConstantFill([], ["input"], shape=[T, 4, 10])
+        output, last_hidden, _, last_state = rnn_cell.LSTM(
+            model=model,
+            input_blob="input",
+            seq_lengths=seq_lengths,
+            initial_states=init_blobs,
+            dim_in=10,
+            dim_out=[10, 10],
+            scope="lstm1",
+            forward_only=False,
+            drop_states=True,
+            return_last_layer_only=True,
+        )
+        softmax, loss = model.net.SoftmaxWithLoss(
+            [model.Flatten(output), "labels"],
+            ['softmax', 'loss'],
+        )
+
+        model.AddGradientOperators([loss])
+        blobs_before = count_blobs(model.net.Proto())
+        optim_proto = memonger.share_grad_blobs(
+            model.net,
+            ["loss"],
+            set(viewvalues(model.param_to_grad)),
+            "",
+            share_activations=True,
+            dont_share_blobs=set(),
+        )
+        blobs_after = count_blobs(optim_proto)
+        self.assertLess(blobs_after, blobs_before)
+
+        # Run once to see all blobs are set up correctly
+        for init_blob in init_blobs:
+            workspace.FeedBlob(init_blob, np.zeros(
+                [1, 4, 10], dtype=np.float32
+            ))
+        workspace.FeedBlob("seq_lengths", np.array([T] * 4, dtype=np.int32))
+        workspace.FeedBlob("labels", np.random.rand(T).astype(np.int32))
+
+        workspace.RunNetOnce(model.param_init_net)
+        workspace.RunNetOnce(model.net)
+
     def test_compute_interference_graph_inplace_ops(self):
         m = model_helper.ModelHelper()
         m.Copy("b1", "b1")
@@ -668,3 +727,31 @@ class MemongerTest(hu.HypothesisTestCase):
             brew.sum(m2, [fc3a, fc3b], "out")
 
         self.assertFalse(memonger.verify_graph_equality(m.net.Proto(), m2.net.Proto()))
+
+    def test_release_blobs_when_used(self):
+        m = model_helper.ModelHelper()
+        fc1 = brew.fc(m, "data", "x", dim_in=2, dim_out=2)
+        fc2 = brew.fc(m, fc1, "y", dim_in=2, dim_out=2)
+        fc3 = brew.fc(m, fc1, "z", dim_in=2, dim_out=2)
+        fc4 = brew.fc(m, fc2, "u", dim_in=2, dim_out=2)
+        m.net.Alias(["u"], ["u_alias"])
+
+        brew.sum(m, [fc3, fc4], "out")
+
+        with_frees = memonger.release_blobs_when_used(m.net.Proto(), set("data"))
+
+        expect_frees = {"x", "y", "z"}  # out is external output
+                                        # and u is aliased so cannot be freed
+        found_frees = set()
+        for op in with_frees.op:
+            if op.type == "Free":
+                self.assertFalse(op.input[0] in found_frees)  # no double frees
+                found_frees.add(op.input[0])
+            else:
+                # Check a freed blob is not used anymore
+                for inp in op.input:
+                    self.assertFalse(inp in found_frees)
+                for outp in op.output:
+                    self.assertFalse(outp in found_frees)
+
+        self.assertEqual(expect_frees, found_frees)

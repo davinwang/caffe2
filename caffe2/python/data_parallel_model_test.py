@@ -50,10 +50,19 @@ class DataParallelModelTest(TestCase):
             sq = model.SquaredL2Distance([sigm, "label"], "sq")
             loss = model.AveragedLoss(sq, "loss")
             loss = model.Scale(loss, scale=loss_scale)
+
+            # For testing explicit sync
+            model.param_init_net.UniformFill([], ["sync_num"], shape=[1])
             return [loss]
 
         def add_optimizer(model):
-            return optimizer.build_sgd(model, 0.1, policy="fixed")
+            return optimizer.build_sgd(
+                model,
+                0.1,
+                policy="fixed",
+                max_gradient_norm=5.0,
+                allow_lr_injection=True,
+            )
 
         workspace.ResetWorkspace()
         model = cnn.CNNModelHelper(
@@ -68,6 +77,7 @@ class DataParallelModelTest(TestCase):
             devices=devices,
             cpu_device=not gpu,
         )
+        data_parallel_model.AddBlobSync(model, ["sync_num"])
 
         np.random.seed(2603)
 
@@ -95,7 +105,18 @@ class DataParallelModelTest(TestCase):
                 workspace.RunNetOnce(model.param_init_net)
                 workspace.CreateNet(model.net)
 
+            workspace.FeedBlob(
+                model._device_prefix + "_0/sync_num",
+                np.array([i * 2]).astype(np.float32),
+                device_option=core.DeviceOption(model._device_type, 0))
             workspace.RunNet(model.net.Proto().name)
+
+            # Test AddBlobSync
+            for j in model._devices:
+                sync = workspace.FetchBlob(
+                    model._device_prefix + "_{}/sync_num".format(j))[0]
+                self.assertTrue(abs(sync - i * 2) < 0.01)
+
         return workspace.FetchBlob("{}_0/fc_w".format(model._device_prefix))
 
     def run_test_locally(self, fn, device_option=None, **kwargs):
@@ -159,6 +180,10 @@ class DataParallelModelTest(TestCase):
             if not gpu or workspace.NumCudaDevices() >= 8:
                 result_8gpus = self.run_model(list(range(8)), gpu=gpu)
                 self.assertTrue(np.allclose(result_1gpus, result_8gpus))
+
+            if not gpu or workspace.NumCudaDevices() >= 16:
+                result_16gpus = self.run_model(list(range(16)), gpu=gpu)
+                self.assertTrue(np.allclose(result_1gpus, result_16gpus))
 
     def test_checkpoint_params(self):
         def add_input_ops(model):
@@ -685,6 +710,7 @@ class ParallelizeGPUBMUFTest(TestCase):
         sq = model.SquaredL2Distance([sigm, "label"], "sq")
         loss = model.AveragedLoss(sq, "loss")
         loss = model.Scale(loss, scale=loss_scale)
+
         return [loss]
 
     def _param_update_fun(self, model):
@@ -990,3 +1016,8 @@ class SparseDataParallelModelTestWithSharedIndices(TestCase):
 
         if workspace.NumCudaDevices() >= 8:
             self.run_model(V, list(range(8)))
+
+
+if __name__ == "__main__":
+    import unittest
+    unittest.main()

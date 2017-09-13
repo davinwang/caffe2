@@ -17,17 +17,21 @@
 CAFFE2_DEFINE_string(caffe2_cuda_memory_pool, "",
               "Sets the memory pool used by caffe2. Possible values are "
               "none, cnmen and cub.");
-// TODO(jiayq): Figure out the best default values for the params below.
-// Currently we are using the setting copied from caffe.
-CAFFE2_DEFINE_int(caffe2_cub_bin_growth, 2,
+
+// For description of CUB caching allocator configuration, see
+// https://nvlabs.github.io/cub/structcub_1_1_caching_device_allocator.html
+CAFFE2_DEFINE_int(caffe2_cub_bin_growth, 8,
              "If using cub as the memory allocator, sets the growth of bins "
              "used by the cub pool.");
-CAFFE2_DEFINE_int(caffe2_cub_min_bin, 6,
+CAFFE2_DEFINE_int(caffe2_cub_min_bin, 3,
              "If using cub as the memory allocator, sets the min number of "
              "bins.");
-CAFFE2_DEFINE_int(caffe2_cub_max_bin, 16,
+CAFFE2_DEFINE_int(caffe2_cub_max_bin, 10,
              "If using cub as the memory allocator, sets the max number of "
              "bins.");
+CAFFE2_DEFINE_int(caffe2_cub_max_managed_mb, 10 * 1024,
+             "If using cub as the memory allocators, sets the maximum amount "
+             "of memory managed in gigabytes");
 
 CAFFE2_DEFINE_bool(
     caffe2_gpu_memory_tracking,
@@ -117,19 +121,9 @@ static void Caffe2InitializeCuda() {
       "max number of gpus expected (",
       CAFFE2_COMPILE_TIME_MAX_GPUS,
       "). Increase that and recompile the caffe binary.");
-  // Save the current device so we can restore it after moving across
-  // different devices.
-  int init_device;
-  CUDA_ENFORCE(cudaGetDevice(&init_device));
 
   for (int i = 0; i < NumCudaDevices(); ++i) {
-    auto err = cudaSetDevice(i);
-    if (err != cudaSuccess) {
-      LOG(WARNING)
-          << "Cannot use device " << i
-          << "due to the following error: " << cudaGetErrorString(err);
-      continue;
-    }
+    DeviceGuard g(i);
     // Enable peer access.
     const int peer_group = i / CAFFE2_CUDA_MAX_PEER_SIZE;
     const int peer_start = peer_group * CAFFE2_CUDA_MAX_PEER_SIZE;
@@ -152,8 +146,6 @@ static void Caffe2InitializeCuda() {
       }
     }
   }
-  // Restore the current device.
-  CUDA_ENFORCE(cudaSetDevice(init_device));
 
   RegisterTypeCallFunction(
     TypeMeta::Id<Tensor<CUDAContext>>(),
@@ -169,21 +161,16 @@ static void Caffe2InitializeCuda() {
 
 static void SetUpCub() {
   VLOG(1) << "Setting up cub memory pool.";
-  const bool k_cub_debug =
-  #ifdef NDEBUG
-      false;
-  #else
-      true;
-  #endif
   // Sets up the cub memory pool
   try {
     g_cub_allocator.reset(new cub::CachingDeviceAllocator(
         FLAGS_caffe2_cub_bin_growth,
         FLAGS_caffe2_cub_min_bin,
         FLAGS_caffe2_cub_max_bin,
-        static_cast<size_t>(-1),
+        size_t(FLAGS_caffe2_cub_max_managed_mb) * 1024L * 1024L,
         false,
-        k_cub_debug));
+        false // debug
+    ));
   } catch (...) {
     CAFFE_THROW("Some error happened at cub initialization.");
   }
@@ -286,7 +273,7 @@ std::vector<long> CUDAContext::MaxMemoryByGpu() {
 
 namespace {
 void TrackMemoryAlloc(size_t nbytes) {
-  int this_gpu = GetCurrentGPUID();
+  int this_gpu = CaffeCudaGetDevice();
   g_total_by_gpu_map[this_gpu] += nbytes;
   g_max_by_gpu_map[this_gpu] =
       max(g_max_by_gpu_map[this_gpu], g_total_by_gpu_map[this_gpu]);
@@ -326,14 +313,14 @@ std::pair<void*, MemoryDeleter> CUDAContext::New(size_t nbytes) {
     CUDA_ENFORCE(cudaMalloc(&ptr, nbytes));
     if (FLAGS_caffe2_gpu_memory_tracking) {
       g_size_map[ptr] = nbytes;
-      g_cuda_device_affiliation[ptr] = GetCurrentGPUID();
+      g_cuda_device_affiliation[ptr] = CaffeCudaGetDevice();
     }
     return {ptr, Delete};
   case CudaMemoryPoolType::CUB:
     CUDA_ENFORCE(g_cub_allocator->DeviceAllocate(&ptr, nbytes));
-    g_cuda_device_affiliation[ptr] = GetCurrentGPUID();
+    g_cuda_device_affiliation[ptr] = CaffeCudaGetDevice();
     VLOG(2) << "CUB allocating pointer " << ptr << " on device "
-            << GetCurrentGPUID();
+            << CaffeCudaGetDevice();
     if (FLAGS_caffe2_gpu_memory_tracking) {
       g_size_map[ptr] = nbytes;
     }

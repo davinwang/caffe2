@@ -89,8 +89,6 @@ REGISTER_CPU_OPERATOR(LengthsToSegmentIds, LengthsToSegmentIdsOp<CPUContext>);
 REGISTER_CPU_OPERATOR(LengthsToRanges, LengthsToRangesOp<CPUContext>);
 REGISTER_CPU_OPERATOR(SegmentIdsToLengths, SegmentIdsToLengthsOp<CPUContext>);
 REGISTER_CPU_OPERATOR(SegmentIdsToRanges, SegmentIdsToRangesOp<CPUContext>);
-REGISTER_CPU_OPERATOR(Slice, SliceOp<int, CPUContext>);
-REGISTER_CPU_OPERATOR(SliceGradient, SliceGradientOp<int, CPUContext>);
 REGISTER_CPU_OPERATOR(Squeeze, SqueezeOp<CPUContext>);
 REGISTER_CPU_OPERATOR(ExpandDims, ExpandDimsOp<CPUContext>);
 REGISTER_CPU_OPERATOR(LengthsToWeights, LengthsToWeightsOp<CPUContext>);
@@ -444,6 +442,7 @@ OPERATOR_SCHEMA(IsEmpty)
     .NumInputs(1)
     .NumOutputs(1)
     .SetDoc("Returns true iff the input tensor has size == 0")
+    .ScalarType(::caffe2::TensorProto_DataType::TensorProto_DataType_BOOL)
     .Input(0, "tensor", "Tensor of any type.")
     .Output(0, "is_empty", "Scalar bool tensor. True if input is empty.");
 
@@ -482,8 +481,8 @@ Example:
     .TensorInferenceFunction([](const OperatorDef& def,
                                 const vector<TensorShape>& in) {
       vector<TensorShape> out(1);
-      for (int i = 0; i < in[1].dims_size(); ++i) {
-        out[0].add_dims(in[1].dims(i));
+      for (auto d : in[1].dims()) {
+        out[0].add_dims(d);
       }
       for (int i = 1; i < in[0].dims_size(); ++i) {
         out[0].add_dims(in[0].dims(i));
@@ -568,7 +567,34 @@ Deduplicates input indices vector and optionally produces reverse remapping.
 There's no guarantees on the ordering of the output indices.
 )DOC")
     .Input(0, "indices", "1D tensor of int32 or int64 indices.")
-    .Output(0, "unique_indices", "1D tensor of deduped entries.");
+    .Output(0, "unique_indices", "1D tensor of deduped entries.")
+    .Output(
+        1,
+        "remapping",
+        "(optional) mapping from `indices` to `unique_indices`. This has the "
+        "same shape as `indices`. Its elements are the indices into "
+        "`unique_indices` such that `Gather(['unique_indices', 'remapping'])` "
+        "yields `indices`.")
+    .TensorInferenceFunction([](const OperatorDef& def,
+                                const vector<TensorShape>& in) {
+      std::vector<TensorShape> out(1);
+      out[0].set_data_type(in[0].data_type());
+      CAFFE_ENFORCE_EQ(in[0].dims_size(), 1);
+      if (in[0].dims(0) <= 1) {
+        // This special case is useful in some situation, e.g., when feeding
+        // tensor inference with empty tensor (where the first dim is the batch
+        // size)
+        out[0].add_dims(in[0].dims(0));
+      } else {
+        out[0].set_unknown_shape(true);
+      }
+      if (def.output_size() > 1) {
+        // Remapping has the same shape as the input tensor
+        out.push_back(in[0]);
+        out.back().set_data_type(TensorProto::INT32);
+      }
+      return out;
+    });
 
 OPERATOR_SCHEMA(LengthsToSegmentIds)
     .NumInputs(1)
@@ -646,40 +672,6 @@ weights derived by lengths. i.e 1/pow(length, power)
 )DOC")
     .Input(0, "lengths", "1-D int32_t or int64_t tensor of lengths")
     .Output(0, "a vector of weights", "1-D float tensor of weights by length");
-
-OPERATOR_SCHEMA(Slice)
-    .NumInputs(1, 3)
-    .NumOutputs(1)
-    .SetDoc(R"DOC(
-Produces a slice of the input tensor. Currently, only slicing in a single
-dimension is supported.
-Slices are passed as 2 1D vectors or as two keyword argument lists with starting
-and end indices for each dimension of the input `data` tensor. End indices are
-non-inclusive. If a negative value is passed for any of the start or end
-indices, it represent number of elements before the end of that dimension.
-
-Example:
-
-  data = [
-      [1, 2, 3, 4],
-      [5, 6, 7, 8],
-  ]
-  starts = [0, 1]
-  ends = [-1, 3]
-
-  result = [
-      [2, 3],
-      [6, 7],
-  ]
-)DOC")
-    .Input(0, "data", "Tensor of data to extract slices from.")
-    .Input(1, "starts", "1D tensor: start-indices for each dimension of data.")
-    .Input(2, "ends", "1D tensor: end-indices for each dimension of data.")
-    .Arg("starts", "List of starting indices")
-    .Arg("ends", "List of ending indices")
-    .Output(0, "output", "Sliced data tensor.");
-
-OPERATOR_SCHEMA(SliceGradient);
 
 OPERATOR_SCHEMA(Squeeze)
     .NumInputs(1)
@@ -799,6 +791,7 @@ OPERATOR_SCHEMA(EnsureDense)
     .NumInputs(1)
     .NumOutputs(1)
     .AllowInplace({{0, 0}})
+    .IdenticalTypeAndShape()
     .SetDoc(R"DOC(
 This operator converts dense or sparse gradients to dense ones.
 Therefore, sparse gradient can be back propagated to Operators that consume
@@ -1030,27 +1023,6 @@ SHOULD_NOT_DO_GRADIENT(LengthsToSegmentIds);
 SHOULD_NOT_DO_GRADIENT(SegmentIdsToLengths);
 SHOULD_NOT_DO_GRADIENT(SegmentIdsToRanges);
 SHOULD_NOT_DO_GRADIENT(SegmentIdsToLengthWeights);
-
-struct GetSliceGradient : public GradientMakerBase {
-  using GradientMakerBase::GradientMakerBase;
-  vector<OperatorDef> GetGradientDefs() override {
-    if (def_.input_size() > 1) {
-      return vector<OperatorDef>{CreateOperatorDef(
-          "SliceGradient",
-          "",
-          std::vector<string>{I(0), I(1), I(2), GO(0)},
-          std::vector<string>{GI(0)})};
-    } else {
-      return vector<OperatorDef>{CreateOperatorDef(
-          "SliceGradient",
-          "",
-          std::vector<string>{I(0), GO(0)},
-          std::vector<string>{GI(0)})};
-    }
-  }
-};
-REGISTER_GRADIENT(Slice, GetSliceGradient);
-
 SHOULD_NOT_DO_GRADIENT(GatherRangesOp);
 SHOULD_NOT_DO_GRADIENT(LengthsGather);
 SHOULD_NOT_DO_GRADIENT(AccumulateHistogram);

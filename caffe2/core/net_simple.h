@@ -19,7 +19,9 @@ namespace caffe2 {
 class SimpleNet : public NetBase {
  public:
   SimpleNet(const std::shared_ptr<const NetDef>& net_def, Workspace* ws);
-  bool Run() override;
+  bool SupportsAsync() override {
+    return false;
+  }
   bool RunAsync() override;
   vector<float> TEST_Benchmark(
       const int warmup_runs,

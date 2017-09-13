@@ -312,6 +312,7 @@ def CreateOperator(
         operator.engine = engine
     # random seed is defined in the device option, so we need to do special
     # care.
+
     if 'random_seed' in kwargs:
         operator.device_option.random_seed = kwargs['random_seed']
         del kwargs['random_seed']
@@ -865,6 +866,7 @@ StopGradient. Op:\n\n{}""".format(op.output[0], str(op)))
     def _GetInitGradients(self, ys):
         input_to_grad = {}
         gradient_ops = []
+
         for y, g in viewitems(ys):
             autograd_op = None
             if g is None:
@@ -1467,6 +1469,8 @@ class Net(object):
             return do_set(self.GivenTensorInt64Fill)
         elif array.dtype == np.str:
             return do_set(self.GivenTensorStringFill)
+        elif array.dtype == np.bool:
+            return do_set(self.GivenTensorBoolFill)
         else:
             return do_set(self.GivenTensorFill)
 
@@ -1491,6 +1495,20 @@ class Net(object):
                 if input == blob_name:
                     return True
         return blob_name in self._external_input_map
+
+    def UsedBlobNames(self):
+        """
+        Returns a set of blob names used in the net
+        """
+        blob_names = set()
+        for op in self._net.op:
+            blob_names |= set(op.input)
+            blob_names |= set(op.output)
+        if self._net.external_input:
+            blob_names |= set(self._net.external_input)
+        if self._net.external_output:
+            blob_names |= set(self._net.external_output)
+        return blob_names
 
     def GetBlobRef(self, blob_name):
         """
@@ -2199,13 +2217,24 @@ def InjectCrossDeviceCopies(net, blob_to_device=None):
                         out_blob, blob_to_device[out_blob], device, op
                     )
                 )
-        blob_to_device.update({o: d for d, o in zip(output_dev, op.output)})
         new_op = caffe2_pb2.OperatorDef()
         new_op.CopyFrom(op)
 
         new_list = [temp_remap.get(b, b) for b in new_op.input]
         del new_op.input[:]
         new_op.input.extend(new_list)
+
+        # keep inplace blobs inplace
+        original_inputs = list(op.input)
+        for i, out in enumerate(new_op.output):
+            try:
+                input_idx = original_inputs.index(out)
+                new_op.output[i] = new_op.input[input_idx]
+            except ValueError:
+                pass
+
+        blob_to_device.update(
+            {o: d for d, o in zip(output_dev, new_op.output)})
         new_net.extend_ops([new_op])
 
     return new_net, blob_to_device
@@ -2460,6 +2489,8 @@ class ExecutionStep(object):
             step_proto.HasField('num_concurrent_instances') else None
         create_workspace = step_proto.create_workspace if\
             step_proto.HasField('create_workspace') else None
+        run_every_ms = step_proto.run_every_ms if\
+            step_proto.HasField('run_every_ms') else None
 
         return execution_step(
             step_proto.name,
@@ -2471,7 +2502,8 @@ class ExecutionStep(object):
             should_stop_blob=should_stop_blob,
             only_once=only_once,
             num_concurrent_instances=num_concurrent_instances,
-            create_workspace=create_workspace)
+            create_workspace=create_workspace,
+            run_every_ms=run_every_ms)
 
 
 def add_nets_in_order(step, net_list):
@@ -2587,7 +2619,8 @@ def execution_step(default_name,
                    should_stop_blob=None,
                    only_once=None,
                    num_concurrent_instances=None,
-                   create_workspace=False):
+                   create_workspace=False,
+                   run_every_ms=None):
     """
     Helper for creating an ExecutionStep.
     - steps_or_nets can be:
@@ -2623,6 +2656,8 @@ def execution_step(default_name,
         step.SetNumConcurrentInstances(num_concurrent_instances)
     if create_workspace:
         step.SetCreateWorkspace(True)
+    if run_every_ms:
+        step.RunEveryMillis(run_every_ms)
 
     if isinstance(steps_or_nets, ExecutionStep):
         step.AddSubstep(steps_or_nets)
