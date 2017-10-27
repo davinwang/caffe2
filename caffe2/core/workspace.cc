@@ -1,3 +1,19 @@
+/**
+ * Copyright (c) 2016-present, Facebook, Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #include "caffe2/core/workspace.h"
 
 #include <algorithm>
@@ -74,6 +90,7 @@ void Workspace::PrintBlobSizes() {
 
 vector<string> Workspace::LocalBlobs() const {
   vector<string> names;
+  names.reserve(blob_map_.size());
   for (auto& entry : blob_map_) {
     names.push_back(entry.first);
   }
@@ -82,11 +99,19 @@ vector<string> Workspace::LocalBlobs() const {
 
 vector<string> Workspace::Blobs() const {
   vector<string> names;
+  names.reserve(blob_map_.size());
   for (auto& entry : blob_map_) {
     names.push_back(entry.first);
   }
+  for (const auto& forwarded : forwarded_blobs_) {
+    const auto parent_ws = forwarded.second.first;
+    const auto& parent_name = forwarded.second.second;
+    if (parent_ws->HasBlob(parent_name)) {
+      names.push_back(forwarded.first);
+    }
+  }
   if (shared_) {
-    vector<string> shared_blobs = shared_->Blobs();
+    const auto& shared_blobs = shared_->Blobs();
     names.insert(names.end(), shared_blobs.begin(), shared_blobs.end());
   }
   return names;
@@ -95,6 +120,10 @@ vector<string> Workspace::Blobs() const {
 Blob* Workspace::CreateBlob(const string& name) {
   if (HasBlob(name)) {
     VLOG(1) << "Blob " << name << " already exists. Skipping.";
+  } else if (forwarded_blobs_.count(name)) {
+    // possible if parent workspace deletes forwarded blob
+    VLOG(1) << "Blob " << name << " is already forwarded from parent workspace "
+            << "(blob " << forwarded_blobs_[name].second << "). Skipping.";
   } else {
     VLOG(1) << "Creating blob " << name;
     blob_map_[name] = unique_ptr<Blob>(new Blob());
@@ -110,7 +139,7 @@ bool Workspace::RemoveBlob(const string& name) {
     return true;
   }
 
-  // won't go into share_ here
+  // won't go into shared_ here
   VLOG(1) << "Blob " << name << " not exists. Skipping.";
   return false;
 }
@@ -118,16 +147,46 @@ bool Workspace::RemoveBlob(const string& name) {
 const Blob* Workspace::GetBlob(const string& name) const {
   if (blob_map_.count(name)) {
     return blob_map_.at(name).get();
+  } else if (forwarded_blobs_.count(name)) {
+    const auto parent_ws = forwarded_blobs_.at(name).first;
+    const auto& parent_name = forwarded_blobs_.at(name).second;
+    return parent_ws->GetBlob(parent_name);
   } else if (shared_ && shared_->HasBlob(name)) {
     return shared_->GetBlob(name);
-  } else {
-    LOG(WARNING) << "Blob " << name << " not in the workspace.";
-    // TODO(Yangqing): do we want to always print out the list of blobs here?
-    // LOG(WARNING) << "Current blobs:";
-    // for (const auto& entry : blob_map_) {
-    //   LOG(WARNING) << entry.first;
-    // }
-    return nullptr;
+  }
+  LOG(WARNING) << "Blob " << name << " not in the workspace.";
+  // TODO(Yangqing): do we want to always print out the list of blobs here?
+  // LOG(WARNING) << "Current blobs:";
+  // for (const auto& entry : blob_map_) {
+  //   LOG(WARNING) << entry.first;
+  // }
+  return nullptr;
+}
+
+void Workspace::AddBlobMapping(
+    const Workspace* parent,
+    const std::unordered_map<string, string>& forwarded_blobs) {
+  CAFFE_ENFORCE(parent, "Parent workspace must be specified");
+  for (const auto& forwarded : forwarded_blobs) {
+    CAFFE_ENFORCE(
+        parent->HasBlob(forwarded.second),
+        "Invalid parent workspace blob " + forwarded.second);
+    if (forwarded_blobs_.count(forwarded.first)) {
+      const auto& ws_blob = forwarded_blobs_[forwarded.first];
+      CAFFE_ENFORCE_EQ(
+          ws_blob.first, parent, "Redefinition of blob " + forwarded.first);
+      CAFFE_ENFORCE_EQ(
+          ws_blob.second,
+          forwarded.second,
+          "Redefinition of blob " + forwarded.first);
+    } else {
+      CAFFE_ENFORCE(
+          !HasBlob(forwarded.first), "Redefinition of blob " + forwarded.first);
+      // Lazy blob resolution - store the parent workspace and
+      // blob name, blob value might change in the parent workspace
+      forwarded_blobs_[forwarded.first] =
+          std::make_pair(parent, forwarded.second);
+    }
   }
 }
 

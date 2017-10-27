@@ -1,3 +1,18 @@
+# Copyright (c) 2016-present, Facebook, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+##############################################################################
+
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
@@ -11,6 +26,12 @@ from hypothesis import given
 import caffe2.python.hypothesis_test_util as hu
 
 import numpy as np
+
+
+def _fill_diagonal(shape, value):
+    result = np.zeros(shape)
+    np.fill_diagonal(result, value)
+    return (result,)
 
 
 class TestFillerOperator(hu.HypothesisTestCase):
@@ -75,6 +96,47 @@ class TestFillerOperator(hu.HypothesisTestCase):
             np.testing.assert_array_equal(shape, blob_out.shape)
             self.assertTrue((blob_out >= a).all())
             self.assertTrue((blob_out <= b).all())
+
+    @given(
+        shape=st.sampled_from(
+            [
+                [3, 3],
+                [5, 5, 5],
+                [7, 7, 7, 7],
+            ]
+        ),
+        **hu.gcs
+    )
+    def test_diagonal_fill_op_float(self, shape, gc, dc):
+        value = 2.5
+        op = core.CreateOperator(
+            'DiagonalFill',
+            [],
+            'out',
+            shape=shape,  # scalar
+            value=value,
+        )
+
+        for device_option in dc:
+            op.device_option.CopyFrom(device_option)
+            # Check against numpy reference
+            self.assertReferenceChecks(gc, op, [shape, value], _fill_diagonal)
+
+    @given(**hu.gcs)
+    def test_diagonal_fill_op_int(self, gc, dc):
+        value = 2
+        shape = [3, 3]
+        op = core.CreateOperator(
+            'DiagonalFill',
+            [],
+            'out',
+            shape=shape,
+            dtype=core.DataType.INT32,
+            value=value,
+        )
+
+        # Check against numpy reference
+        self.assertReferenceChecks(gc, op, [shape, value], _fill_diagonal)
 
     @given(**hu.gcs)
     def test_gaussian_fill_op(self, gc, dc):

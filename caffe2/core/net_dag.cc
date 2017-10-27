@@ -1,4 +1,20 @@
-#include "caffe2/core/net.h"
+/**
+ * Copyright (c) 2016-present, Facebook, Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+#include "caffe2/core/net_dag.h"
 
 #include <set>
 #include <stack>
@@ -19,11 +35,6 @@ CAFFE2_DEFINE_bool(
 namespace caffe2 {
 
 namespace {
-
-bool sameDevice(const DeviceOption& lhs, const DeviceOption& rhs) {
-  return lhs.device_type() == rhs.device_type() &&
-      lhs.cuda_gpu_id() == rhs.cuda_gpu_id();
-}
 
 using OpIndex = int;
 DAGNetBase::ExecutionChains singleChains(
@@ -178,7 +189,7 @@ DAGNetBase::ExecutionChains computeChains(
     return (
         node_seen_count[cur.first] == 1 &&
         (chain.size() == 0 ||
-         sameDevice(
+         IsSameDevice(
              orig_nodes[cur.first].operator_->device_option(),
              orig_nodes[chain.back()].operator_->device_option())));
   };
@@ -282,7 +293,7 @@ DAGNetBase::DAGNetBase(
   // Initialize the operators
   for (int idx = 0; idx < net_def->op_size(); ++idx) {
     const OperatorDef& op_def = net_def->op(idx);
-    VLOG(1) << "Creating operator #" << idx << ": " << op_def.name() << ":"
+    VLOG(1) << "Creating operator #" << idx << ": " << op_def.name() << ": "
             << op_def.type();
     if (!op_def.has_device_option() && net_def_has_device_option) {
       OperatorDef temp_def(op_def);
@@ -422,10 +433,9 @@ DAGNetBase::~DAGNetBase() {
   }
 }
 
-bool DAGNetBase::Run() {
-  if (observer_) {
-    observer_->Start();
-  }
+bool DAGNetBase::RunAsync() {
+  StartAllObservers();
+
   // Lock run_in_progress_ to prevent concurrent Run()s.
   std::unique_lock<std::mutex> run_lock(run_in_progress_);
   VLOG(1) << "Running parallel net.";
@@ -488,9 +498,8 @@ bool DAGNetBase::Run() {
         op.operator_->debug_def().type(),
         ") has some runtime parents left.");
   }
-  if (observer_) {
-    observer_->Stop();
-  }
+
+  StopAllObservers();
   // If the above while loop finished, we know that the current run finished.
   return success_;
 }
@@ -613,33 +622,24 @@ vector<float> DAGNetBase::TEST_Benchmark(
   return vector<float>{millis / main_runs};
 }
 
-class DAGNet : public DAGNetBase {
- public:
-  using DAGNetBase::DAGNetBase;
+bool DAGNet::RunAt(const std::vector<int>& chain) {
+  const auto& net_name = name_.c_str();
+  for (const auto i : chain) {
+    const auto& opdef = operator_nodes_[i].operator_->debug_def();
+    const auto& op = operator_nodes_[i].operator_.get();
 
- protected:
-  bool RunAt(const std::vector<int>& chain) override {
-    const auto& net_name = name_.c_str();
-    for (const auto i : chain) {
-      const auto& opdef = operator_nodes_[i].operator_->debug_def();
-      const auto& op = operator_nodes_[i].operator_.get();
-
-      const auto& op_name = opdef.name().c_str();
-      const auto& op_type = opdef.type().c_str();
-      CAFFE_SDT(operator_start, net_name, op_name, op_type, op);
-      const auto success = operator_nodes_[i].operator_->Run();
-      CAFFE_SDT(operator_done, net_name, op_name, op_type, op);
-      if (!success) {
-        return false;
-      }
+    const auto& op_name = opdef.name().c_str();
+    const auto& op_type = opdef.type().c_str();
+    CAFFE_SDT(operator_start, net_name, op_name, op_type, op);
+    const auto success = operator_nodes_[i].operator_->Run();
+    CAFFE_SDT(operator_done, net_name, op_name, op_type, op);
+    if (!success) {
+      return false;
     }
-    return true;
   }
-};
-
-namespace {
+  return true;
+}
 
 REGISTER_NET(dag, DAGNet);
-}
 
 } // namespace caffe2

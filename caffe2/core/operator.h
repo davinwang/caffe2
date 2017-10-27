@@ -1,3 +1,19 @@
+/**
+ * Copyright (c) 2016-present, Facebook, Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #ifndef CAFFE2_CORE_OPERATOR_H_
 #define CAFFE2_CORE_OPERATOR_H_
 
@@ -22,7 +38,10 @@
 
 namespace caffe2 {
 
-class OperatorBase {
+class OperatorBase;
+typedef ObserverBase<OperatorBase> OperatorObserver;
+
+class OperatorBase : public Observable<OperatorBase> {
  public:
   explicit OperatorBase(const OperatorDef& operator_def, Workspace* ws);
   virtual ~OperatorBase() noexcept {}
@@ -100,12 +119,29 @@ class OperatorBase {
   inline int OutputSize() { return outputs_.size(); }
   inline const vector<const Blob*>& Inputs() const { return inputs_; }
   inline const vector<Blob*>& Outputs() { return outputs_; }
+  vector<TensorShape> InputTensorShapes();
+
+  virtual void WaitEvent(const Event& ev) {
+    CAFFE_NOT_IMPLEMENTED;
+  }
+
+  inline void Wait(const OperatorBase& other) {
+    WaitEvent(other.event());
+  }
+
+  virtual void Record() {
+    CAFFE_NOT_IMPLEMENTED;
+  }
 
   virtual bool Run(int /* unused */ /*stream_id*/ = 0) {
     CAFFE_NOT_IMPLEMENTED;
   }
 
-  virtual bool RunAsync(int /* unused */ stream_id = 0) {
+  // RunAsync, if implemenented by the specific operators, will schedule the
+  // computation on the corresponding context and record the event in its
+  // event_ member object. If the specific operator does not support RunAsync,
+  // it will simply be synchronous as a fallback.
+  virtual bool RunAsync(int stream_id = 0) {
     return Run(stream_id);
   }
 
@@ -152,14 +188,6 @@ class OperatorBase {
   }
 
  public:
-  void SetObserver(std::unique_ptr<ObserverBase<OperatorBase>> observer) {
-    observer_ = std::move(observer);
-  }
-
-  void RemoveObserver() {
-    observer_ = nullptr;
-  }
-
   void RecordLastFailedOpNetPosition() {
     if (net_position_ != kNoNetPositionSet) {
       VLOG(1) << "Operator with id " << net_position_ << " failed";
@@ -181,24 +209,39 @@ class OperatorBase {
     return device_option_;
   }
 
+  const Event& event() const {
+    return event_;
+  }
+
+  const std::string& type() {
+    CAFFE_ENFORCE(operator_def_.get() != nullptr);
+    return operator_def_->type();
+  }
+
+  void annotate_engine(const std::string& engine) {
+    engine_ = engine;
+  }
+
+  const std::string& engine() const {
+    return engine_;
+  }
+
  public:
   static constexpr int kNoNetPositionSet = -1;
 
-  ObserverBase<OperatorBase>* GetObserver() {
-    return observer_.get();
-  }
-
- protected:
-  Workspace* operator_ws_;
-  std::unique_ptr<ObserverBase<OperatorBase>> observer_;
-
  private:
+  Workspace* operator_ws_;
   std::shared_ptr<const OperatorDef> operator_def_;
   DeviceOption device_option_;
+  std::string engine_;
   vector<const Blob*> inputs_;
   vector<Blob*> outputs_;
 
   int net_position_{kNoNetPositionSet};
+
+ protected:
+  // An event used by asynchronous execution.
+  Event event_;
 
   DISABLE_COPY_AND_ASSIGN(OperatorBase);
 };
@@ -252,23 +295,32 @@ class Operator : public OperatorBase {
     return OperatorBase::template Output<Tensor<Context>>(idx);
   }
 
+  void WaitEvent(const Event& ev) final {
+    context_.SwitchToDevice();
+    context_.WaitEvent(ev);
+  }
+
+  void Record() final {
+    context_.SwitchToDevice();
+    context_.Record(&event_);
+  }
+
   // The run function of Operator switches to the device, and then carries out
   // the actual computation with RunOnDevice(). You should implement RunOnDevice
   // instead of Run().
   bool Run(int stream_id = 0) final {
     try {
-      if (observer_) {
-        observer_->Start();
-      }
+      StartAllObservers();
+
       context_.SwitchToDevice(stream_id);
       bool result = RunOnDevice();
       if (!result) {
         this->RecordLastFailedOpNetPosition();
       }
       context_.FinishDeviceComputation(); // throws on error
-      if (observer_) {
-        observer_->Stop();
-      }
+
+      StopAllObservers();
+
       return result;
     } catch (EnforceNotMet& err) {
       if (has_debug_def()) {
@@ -291,6 +343,7 @@ class Operator : public OperatorBase {
       if (!result) {
         this->RecordLastFailedOpNetPosition();
       }
+      context_.Record(&event_);
       return result;
     } catch (EnforceNotMet& err) {
       if (has_debug_def()) {
@@ -611,6 +664,29 @@ unique_ptr<OperatorBase> CreateOperator(
     const OperatorDef& operator_def,
     Workspace* ws,
     int net_position = OperatorBase::kNoNetPositionSet);
+
+const std::string OpRegistryKey(
+    const std::string& op_type,
+    const std::string& engine = "");
+
+// User can set the preferred engines as a list of engine names, in
+// descending order of preference.
+using EnginePrefType = std::vector<std::string>;
+// {device_type -> {operator_name -> EnginePrefType}}
+using PerOpEnginePrefType =
+    CaffeMap<int, CaffeMap<std::string, EnginePrefType>>;
+// {device_type -> EnginePrefType}
+using GlobalEnginePrefType = CaffeMap<int, EnginePrefType>;
+void SetPerOpEnginePref(const PerOpEnginePrefType& per_op_engine_pref);
+void SetGlobalEnginePref(const GlobalEnginePrefType& global_engine_pref);
+void SetEnginePref(
+    const PerOpEnginePrefType& per_op_engine_pref,
+    const GlobalEnginePrefType& global_engine_pref);
+void SetOpEnginePref(
+    const std::string& op_type,
+    const CaffeMap<int, EnginePrefType>& op_pref);
+
+TensorShape GetTensorShapeOfBlob(const Blob* b);
 
 TensorShapes InferBlobShapesAndTypesFromWorkspace(
     Workspace* ws,

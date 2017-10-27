@@ -1,3 +1,18 @@
+# Copyright (c) 2016-present, Facebook, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+##############################################################################
+
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
@@ -19,14 +34,15 @@ class TestSpatialBN(hu.HypothesisTestCase):
            seed=st.integers(0, 65535),
            order=st.sampled_from(["NCHW", "NHWC"]),
            epsilon=st.floats(min_value=1e-5, max_value=1e-2),
+           inplace=st.sampled_from([True, False]),
            **hu.gcs)
     def test_spatialbn_test_mode_3d(
             self, size, input_channels, batch_size, seed, order, epsilon,
-            gc, dc):
+            inplace, gc, dc):
         op = core.CreateOperator(
             "SpatialBN",
             ["X", "scale", "bias", "mean", "var"],
-            ["Y"],
+            ["X" if inplace else "Y"],
             order=order,
             is_test=True,
             epsilon=epsilon,
@@ -62,14 +78,15 @@ class TestSpatialBN(hu.HypothesisTestCase):
            seed=st.integers(0, 65535),
            order=st.sampled_from(["NCHW", "NHWC"]),
            epsilon=st.floats(min_value=1e-5, max_value=1e-2),
+           inplace=st.sampled_from([True, False]),
            **hu.gcs)
     def test_spatialbn_test_mode_1d(
             self, size, input_channels, batch_size, seed, order, epsilon,
-            gc, dc):
+            inplace, gc, dc):
         op = core.CreateOperator(
             "SpatialBN",
             ["X", "scale", "bias", "mean", "var"],
-            ["Y"],
+            ["X" if inplace else "Y"],
             order=order,
             is_test=True,
             epsilon=epsilon,
@@ -104,14 +121,15 @@ class TestSpatialBN(hu.HypothesisTestCase):
            order=st.sampled_from(["NCHW", "NHWC"]),
            epsilon=st.floats(min_value=1e-5, max_value=1e-2),
            engine=st.sampled_from(["", "CUDNN"]),
+           inplace=st.sampled_from([True, False]),
            **hu.gcs)
     def test_spatialbn_test_mode(
             self, size, input_channels, batch_size, seed, order, epsilon,
-            engine, gc, dc):
+            inplace, engine, gc, dc):
         op = core.CreateOperator(
             "SpatialBN",
             ["X", "scale", "bias", "mean", "var"],
-            ["Y"],
+            ["X" if inplace else "Y"],
             order=order,
             is_test=True,
             epsilon=epsilon,
@@ -148,14 +166,16 @@ class TestSpatialBN(hu.HypothesisTestCase):
            order=st.sampled_from(["NCHW", "NHWC"]),
            epsilon=st.floats(1e-5, 1e-2),
            engine=st.sampled_from(["", "CUDNN"]),
+           inplace=st.sampled_from([True, False]),
            **hu.gcs)
     def test_spatialbn_train_mode(
             self, size, input_channels, batch_size, seed, order, epsilon,
-            engine, gc, dc):
+            inplace, engine, gc, dc):
         op = core.CreateOperator(
             "SpatialBN",
             ["X", "scale", "bias", "running_mean", "running_var"],
-            ["Y", "running_mean", "running_var", "saved_mean", "saved_var"],
+            ["X" if inplace else "Y",
+             "running_mean", "running_var", "saved_mean", "saved_var"],
             order=order,
             is_test=False,
             epsilon=epsilon,

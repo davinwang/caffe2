@@ -1,3 +1,19 @@
+/**
+ * Copyright (c) 2016-present, Facebook, Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #ifndef CAFFE2_CORE_CONTEXT_GPU_H_
 #define CAFFE2_CORE_CONTEXT_GPU_H_
 
@@ -15,8 +31,7 @@ namespace caffe2 {
 
 enum class CudaMemoryPoolType {
   NONE = 0,
-  CNMEM = 1,
-  CUB = 2,
+  CUB = 1,
 };
 
 /**
@@ -25,7 +40,6 @@ enum class CudaMemoryPoolType {
  * The memory pool is set up during caffe2's global initialization time.
  */
 CudaMemoryPoolType GetCudaMemoryPoolType();
-
 
 /**
  * A struct to host thread-local cuda objects.
@@ -111,10 +125,19 @@ class CUDAContext final {
 
   inline void SwitchToDevice(int stream_id) {
     set_stream_id(stream_id);
-    CUDA_ENFORCE(cudaSetDevice(gpu_id_));
+    CaffeCudaSetDevice(gpu_id_);
   }
   inline void SwitchToDevice() {
     SwitchToDevice(0);
+  }
+
+  inline void WaitEvent(const Event& ev) {
+    ev.Wait(CUDA, this);
+  }
+
+  inline void Record(Event* ev) const {
+    CAFFE_ENFORCE(ev, "Event must not be null.");
+    ev->Record(CUDA, this);
   }
 
   void FinishDeviceComputation() {
@@ -192,12 +215,11 @@ class CUDAContext final {
     CopyBytes<SrcContext, DstContext>(n * meta.itemsize(), src, dst);
   }
 
+ protected:
+  static void Delete(void* data);
   void set_stream_id(int stream_id) {
     stream_id_ = stream_id;
   }
-
- protected:
-  static void Delete(void* data);
 
   int gpu_id_;
   int stream_id_ = 0;
@@ -242,6 +264,10 @@ struct PinnedCPUAllocator final : CPUAllocator {
     CUDA_ENFORCE(cudaMallocHost(&data, nbytes));
     memset(data, 0, nbytes);
     return {data, Delete};
+  }
+
+  MemoryDeleter GetDeleter() override {
+    return Delete;
   }
 
  private:

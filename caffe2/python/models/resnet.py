@@ -1,3 +1,18 @@
+# Copyright (c) 2016-present, Facebook, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+##############################################################################
+
 ## @package resnet
 # Module caffe2.python.models.resnet
 
@@ -219,7 +234,11 @@ def create_resnet50(
     conv1_kernel=7,
     conv1_stride=2,
     final_avg_kernel=7,
+    fp16_data=False,  # whether to use FP16 input
 ):
+    if fp16_data:
+        data = model.FloatToHalf(data, data + "_fp16")
+
     # conv1 + maxpool
     brew.conv(
         model,
@@ -283,6 +302,9 @@ def create_resnet50(
     last_out = brew.fc(
         model, final_avg, 'last_out_L{}'.format(num_labels), 2048, num_labels
     )
+
+    if fp16_data:
+        last_out = model.net.HalfToFloat(last_out, last_out + '_fp32')
 
     if no_loss:
         return last_out
