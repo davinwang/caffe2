@@ -1,3 +1,18 @@
+# Copyright (c) 2016-present, Facebook, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+##############################################################################
+
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
@@ -180,7 +195,7 @@ def create_test(output_dir, width, height, default_bound, minsize, crop, means,
 
             label_tensor = tensor_protos.protos.add()
             label_tensor.data_type = 2  # int32 data
-            assert (label_type >= 0 and label_type <= 2)
+            assert (label_type >= 0 and label_type <= 3)
             if label_type == 0:
                 label_tensor.int32_data.append(index)
                 expected_label = index
@@ -195,6 +210,16 @@ def create_test(output_dir, width, height, default_bound, minsize, crop, means,
                 for _idx, val in enumerate(embedding_label.tolist()):
                     label_tensor.int32_data.append(val)
                 expected_label = embedding_label
+            elif label_type == 3:
+                weight_tensor = tensor_protos.protos.add()
+                weight_tensor.data_type = 1  # float weights
+                binary_labels = np.random.randint(2, size=num_labels)
+                expected_label = np.zeros(num_labels).astype(np.float32)
+                for idx, val in enumerate(binary_labels.tolist()):
+                    expected_label[idx] = val * idx
+                    if val == 1:
+                        label_tensor.int32_data.append(idx)
+                        weight_tensor.float_data.append(idx)
 
             if output1:
                 output1_tensor = tensor_protos.protos.add()
@@ -352,7 +377,7 @@ class TestImport(hu.HypothesisTestCase):
         stds=st.tuples(st.floats(min_value=1, max_value=10),
                        st.floats(min_value=1, max_value=10),
                        st.floats(min_value=1, max_value=10)),
-        label_type=st.integers(0, 2),
+        label_type=st.integers(0, 3),
         num_labels=st.integers(min_value=8, max_value=4096),
         is_test=st.integers(min_value=0, max_value=1),
         scale_jitter_type=st.integers(min_value=0, max_value=1),
@@ -386,7 +411,7 @@ class TestImport(hu.HypothesisTestCase):
         stds=st.tuples(st.floats(min_value=1, max_value=10),
                        st.floats(min_value=1, max_value=10),
                        st.floats(min_value=1, max_value=10)),
-        label_type=st.integers(0, 2),
+        label_type=st.integers(0, 3),
         num_labels=st.integers(min_value=8, max_value=4096),
         is_test=st.integers(min_value=0, max_value=1),
         scale_jitter_type=st.integers(min_value=0, max_value=1),

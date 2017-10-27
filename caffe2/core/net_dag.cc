@@ -1,3 +1,19 @@
+/**
+ * Copyright (c) 2016-present, Facebook, Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #include "caffe2/core/net_dag.h"
 
 #include <set>
@@ -277,7 +293,7 @@ DAGNetBase::DAGNetBase(
   // Initialize the operators
   for (int idx = 0; idx < net_def->op_size(); ++idx) {
     const OperatorDef& op_def = net_def->op(idx);
-    VLOG(1) << "Creating operator #" << idx << ": " << op_def.name() << ":"
+    VLOG(1) << "Creating operator #" << idx << ": " << op_def.name() << ": "
             << op_def.type();
     if (!op_def.has_device_option() && net_def_has_device_option) {
       OperatorDef temp_def(op_def);
@@ -418,9 +434,8 @@ DAGNetBase::~DAGNetBase() {
 }
 
 bool DAGNetBase::RunAsync() {
-  if (observer_) {
-    observer_->Start();
-  }
+  StartAllObservers();
+
   // Lock run_in_progress_ to prevent concurrent Run()s.
   std::unique_lock<std::mutex> run_lock(run_in_progress_);
   VLOG(1) << "Running parallel net.";
@@ -483,9 +498,8 @@ bool DAGNetBase::RunAsync() {
         op.operator_->debug_def().type(),
         ") has some runtime parents left.");
   }
-  if (observer_) {
-    observer_->Stop();
-  }
+
+  StopAllObservers();
   // If the above while loop finished, we know that the current run finished.
   return success_;
 }

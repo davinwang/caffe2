@@ -1,3 +1,19 @@
+/**
+ * Copyright (c) 2016-present, Facebook, Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 // Implements the math functions for CPU.
 #include <cub/block/block_reduce.cuh>
 
@@ -261,6 +277,240 @@ void Gemm<float16, CUDAContext>(
   }
 }
 
+template <>
+void GemmBatched<float, CUDAContext>(
+    const CBLAS_TRANSPOSE TransA,
+    const CBLAS_TRANSPOSE TransB,
+    const int A_size,
+    const int A_batches,
+    const int B_size,
+    const int B_batches,
+    const int M,
+    const int N,
+    const int K,
+    const float alpha,
+    const float* A,
+    const float* B,
+    const float beta,
+    float* C,
+    CUDAContext* context,
+    Tensor<CUDAContext>* scratch,
+    TensorProto::DataType math_type) {
+
+#if __CUDACC_VER_MAJOR__ < 8
+  auto a_offset = A_size / A_batches;
+  auto b_offset = B_size / B_batches;
+  auto y_offset = M * N;
+  // loop over matrices in the batch
+  for (int i = 0; i < A_batches; ++i) {
+    math::Gemm<float, CUDAContext>(
+        TransA,
+        TransB,
+        M,
+        N,
+        K,
+        1,
+        A + a_offset * i,
+        B + b_offset * i,
+        0,
+        C + y_offset * i,
+        context);
+  }
+#else
+  // Note that cublas follows fortran order, so the order is different from
+  // the cblas convention.
+  int lda = (TransA == CblasNoTrans) ? K : M;
+  int ldb = (TransB == CblasNoTrans) ? N : K;
+
+  cublasOperation_t cuTransA =
+      (TransA == CblasNoTrans) ? CUBLAS_OP_N : CUBLAS_OP_T;
+  cublasOperation_t cuTransB =
+      (TransB == CblasNoTrans) ? CUBLAS_OP_N : CUBLAS_OP_T;
+  CUBLAS_ENFORCE(cublasSgemmStridedBatched(
+        context->cublas_handle(),
+        cuTransB,
+        cuTransA,
+        N,
+        M,
+        K,
+        &alpha,
+        B,
+        ldb,
+        B_size / B_batches, // B stride
+        A,
+        lda,
+        A_size / A_batches, // A stride
+        &beta,
+        C,
+        N,
+        M*N,                // C stride
+        A_batches));
+#endif
+}
+
+namespace {
+
+__global__ void FloatToHalfKernel(const int N, const float* X, half* Y) {
+  CUDA_1D_KERNEL_LOOP(i, N) {
+    Y[i] = __float2half(X[i]);
+  }
+}
+
+__global__ void HalfToFloatKernel(const int N, const half* X, float* Y) {
+  CUDA_1D_KERNEL_LOOP(i, N) {
+    Y[i] = __half2float(X[i]);
+  }
+}
+
+};
+
+template <>
+void GemmBatched<float16, CUDAContext>(
+    const CBLAS_TRANSPOSE TransA,
+    const CBLAS_TRANSPOSE TransB,
+    const int A_size,
+    const int A_batches,
+    const int B_size,
+    const int B_batches,
+    const int M,
+    const int N,
+    const int K,
+    const float alpha,
+    const float16* A,
+    const float16* B,
+    const float beta,
+    float16* C,
+    CUDAContext* context,
+    Tensor<CUDAContext>* scratch,
+    TensorProto::DataType math_type) {
+
+#if __CUDACC_VER_MAJOR__ < 8
+  auto a_offset = A_size / A_batches;
+  auto b_offset = B_size / B_batches;
+  auto y_offset = M * N;
+  // loop over matrices in the batch
+  for (int i = 0; i < A_batches; ++i) {
+    math::Gemm<float16, CUDAContext>(
+        TransA,
+        TransB,
+        M,
+        N,
+        K,
+        1,
+        A + a_offset * i,
+        B + b_offset * i,
+        0,
+        C + y_offset * i,
+        context);
+  }
+#else
+  // 3 options:
+  // 1) scratch != null = cast to fp32, SgemmStridedBatched, cast result to fp16
+  // 2) math_type == FLOAT, scratch == nullptr = looped SgemmEx
+  // 3) math_type == FLOAT16, scratch == nullptr = batched Hgemm
+
+  if (scratch != nullptr) {
+    // cast, cublasSgemmStridedBatched, cast
+    size_t in_elems = A_size + B_size;
+    size_t out_elems = A_batches*M*N;
+
+    scratch->Resize(in_elems+out_elems);
+    float* scratch_ptr = scratch->mutable_data<float>();
+
+    float* A_fp32 = scratch_ptr;
+    float* B_fp32 = scratch_ptr + A_size;
+    float* C_fp32 = scratch_ptr + A_size + B_size;
+
+    // cast A, B into fp32
+    HalfToFloatKernel<<<CAFFE_GET_BLOCKS(A_size),
+                        CAFFE_CUDA_NUM_THREADS,
+                        0,
+                        context->cuda_stream()>>>(A_size, (half*)A, A_fp32);
+    HalfToFloatKernel<<<CAFFE_GET_BLOCKS(B_size),
+                        CAFFE_CUDA_NUM_THREADS,
+                        0,
+                        context->cuda_stream()>>>(B_size, (half*)B, B_fp32);
+
+    // run fp32 batched Gemm
+    GemmBatched<float,CUDAContext>(
+        TransA,
+        TransB,
+        A_size,
+        A_batches,
+        B_size,
+        B_batches,
+        M,
+        N,
+        K,
+        alpha,
+        A_fp32,
+        B_fp32,
+        beta,
+        C_fp32,
+        context);
+
+    // cast result back to fp16
+    FloatToHalfKernel<<<CAFFE_GET_BLOCKS(A_batches*M*N),
+                        CAFFE_CUDA_NUM_THREADS,
+                        0,
+                        context->cuda_stream()>>>(A_batches*M*N, C_fp32, (half*)C);
+  } else {
+    if (math_type == TensorProto_DataType_FLOAT) {
+      auto a_offset = A_size / A_batches;
+      auto b_offset = B_size / B_batches;
+      auto y_offset = M * N;
+      // loop over matrices in the batch
+      for (int i = 0; i < A_batches; ++i) {
+        math::Gemm<float16, CUDAContext>(
+            TransA,
+            TransB,
+            M,
+            N,
+            K,
+            1,
+            A + a_offset * i,
+            B + b_offset * i,
+            0,
+            C + y_offset * i,
+            context);
+      }
+    } else if (math_type == TensorProto_DataType_FLOAT16) {
+      // Note that cublas follows fortran order, so the order is different from
+      // the cblas convention.
+      int lda = (TransA == CblasNoTrans) ? K : M;
+      int ldb = (TransB == CblasNoTrans) ? N : K;
+      cublasOperation_t cuTransA =
+          (TransA == CblasNoTrans) ? CUBLAS_OP_N : CUBLAS_OP_T;
+      cublasOperation_t cuTransB =
+          (TransB == CblasNoTrans) ? CUBLAS_OP_N : CUBLAS_OP_T;
+
+      // convert alpha, beta from float -> __half
+      auto alpha_fp16 = convert::floatToHalf(alpha);
+      auto beta_fp16 = convert::floatToHalf(beta);
+      CUBLAS_ENFORCE(cublasHgemmStridedBatched(
+            context->cublas_handle(),
+            cuTransB,
+            cuTransA,
+            N,
+            M,
+            K,
+            &alpha_fp16,
+            (const __half*)B,
+            ldb,
+            B_size / B_batches,
+            (const __half*)A,
+            lda,
+            A_size / A_batches,
+            &beta_fp16,
+            (__half*)C,
+            N,
+            M*N,
+            A_batches));
+    }
+  }
+#endif
+}
+
 #if CUDA_VERSION >= 9000
 
 // No change, but required. Defer to default CUDA engine
@@ -351,6 +601,84 @@ void Gemm<float16, CUDAContext, TensorCoreEngine>(
   }
 }
 
+template <>
+void GemmBatched<float, CUDAContext, TensorCoreEngine>(
+    const CBLAS_TRANSPOSE TransA,
+    const CBLAS_TRANSPOSE TransB,
+    const int A_size,
+    const int A_batches,
+    const int B_size,
+    const int B_batches,
+    const int M,
+    const int N,
+    const int K,
+    const float alpha,
+    const float* A,
+    const float* B,
+    const float beta,
+    float* C,
+    CUDAContext* context,
+    Tensor<CUDAContext>* scratch,
+    TensorProto::DataType math_type) {
+  return GemmBatched<float, CUDAContext, DefaultEngine>(
+      TransA,
+      TransB,
+      A_size,
+      A_batches,
+      B_size,
+      B_batches,
+      M,
+      N,
+      K,
+      alpha,
+      A,
+      B,
+      beta,
+      C,
+      context,
+      scratch,
+      math_type);
+}
+
+template <>
+void GemmBatched<float16, CUDAContext, TensorCoreEngine>(
+    const CBLAS_TRANSPOSE TransA,
+    const CBLAS_TRANSPOSE TransB,
+    const int A_size,
+    const int A_batches,
+    const int B_size,
+    const int B_batches,
+    const int M,
+    const int N,
+    const int K,
+    const float alpha,
+    const float16* A,
+    const float16* B,
+    const float beta,
+    float16* C,
+    CUDAContext* context,
+    Tensor<CUDAContext>* scratch,
+    TensorProto::DataType math_type) {
+  return GemmBatched<float16, CUDAContext, DefaultEngine>(
+      TransA,
+      TransB,
+      A_size,
+      A_batches,
+      B_size,
+      B_batches,
+      M,
+      N,
+      K,
+      alpha,
+      A,
+      B,
+      beta,
+      C,
+      context,
+      scratch,
+      math_type);
+}
+
 #endif // CUDA_VERSION >= 9000
 
 template <>
@@ -434,7 +762,9 @@ __global__ void AddStripedBatchKernel(
   for (int j = 0; j < batch; j++) {
     const T* x = first + j * stripe;
     CUDA_1D_KERNEL_LOOP(i, N) {
-      Y[i] += x[i];
+      float tmpY = convert::To<T, float>(Y[i]);
+      tmpY += convert::To<T,float>(x[i]);
+      Y[i] = convert::To<float,T>(tmpY);
     }
   }
 }
@@ -457,7 +787,7 @@ __global__ void AddStripedBatchKernel(
   }
 
 CAFFE2_SPECIALIZED_CUDA_ADD_STRIPED_BATCH(float);
-CAFFE2_SPECIALIZED_CUDA_ADD_STRIPED_BATCH(double);
+CAFFE2_SPECIALIZED_CUDA_ADD_STRIPED_BATCH(float16);
 #undef CAFFE2_SPECIALIZED_CUDA_ADD_STRIPED_BATCH
 
 template <>
@@ -1260,7 +1590,7 @@ __global__ void im2col_nd_gpu_kernel(
     const int* stride,
     const int* dilation,
     T* data_col) {
-  int d_temp[num_axes]; // NOLINT(runtime/arrays)
+  int d_offset[num_axes]; // NOLINT(runtime/arrays)
   int d_iter[num_axes]; // NOLINT(runtime/arrays)
 
   __shared__ int shared_dilation[num_axes];
@@ -1283,53 +1613,54 @@ __global__ void im2col_nd_gpu_kernel(
   __syncthreads();
 
   int i;
+  int kernel_size = 1;
+  for (i = 0; i < num_axes; ++i) {
+    kernel_size *= shared_kernel_shape[i];
+  }
   CUDA_1D_KERNEL_LOOP(index, n) {
-    // Initialize channel_in, computed in the loop below, with intermediate
-    // computations used to compute the spatial indices.
-    int channel_in = index;
-    int channel_out = 1;
-    for (i = num_axes - 1; i >= 0; --i) {
-      d_temp[i] = channel_in % shared_col_shape[i + 1];
-      channel_in /= shared_col_shape[i + 1];
-      channel_out *= shared_kernel_shape[i];
+    if (index >= col_shape[0]) {
+      break;
     }
-    channel_out *= channel_in;
-    int data_col_inc = 1;
+    // Initialize offset, computed in the loop below, with intermediate
+    // computations used to compute the spatial indices.
+    int offset = index;
+    for (i = num_axes - 1; i >= 0; --i) {
+      if (i < num_axes - 1) {
+        offset /= shared_kernel_shape[i + 1];
+      }
+      d_offset[i] = offset % shared_kernel_shape[i];
+    }
     for (i = 0; i < num_axes; ++i) {
-      channel_out *= shared_col_shape[i + 1];
-      channel_out += d_temp[i];
-      d_temp[i] = d_temp[i] * shared_stride[i] - shared_pad[i];
-      channel_in *= shared_im_shape[i + 1];
-      channel_in += d_temp[i];
-      data_col_inc *= shared_col_shape[i + 1];
       d_iter[i] = 0;
     }
-    T* data_col_ptr = data_col + channel_out;
-    const T* data_im_ptr = data_im + channel_in;
     bool incremented;
     do {
+      int index_col = index;
+      int index_im = index / kernel_size;
       bool in_range = true;
       for (i = 0; i < num_axes; ++i) {
-        const int d_iter_im = d_iter[i] * shared_dilation[i] + d_temp[i];
-        in_range &= d_iter_im >= 0 && d_iter_im < shared_im_shape[i + 1];
-        if (!in_range) {
-          break;
-        }
+        const int d = d_iter[i];
+        const int d_im = d * shared_stride[i] - shared_pad[i] +
+            d_offset[i] * shared_dilation[i];
+        in_range &= (d_im >= 0 && d_im < shared_im_shape[i + 1]);
+
+        index_col *= shared_col_shape[i + 1];
+        index_col += d;
+        index_im *= shared_im_shape[i + 1];
+        index_im += d_im;
       }
       if (in_range) {
-        int data_im_offset = d_iter[0] * shared_dilation[0];
-        for (i = 1; i < num_axes; ++i) {
-          data_im_offset *= shared_im_shape[i + 1];
-          data_im_offset += d_iter[i] * shared_dilation[i];
-        }
-        *data_col_ptr = data_im_ptr[data_im_offset];
+        // data_col[index_col] = 0;
+        data_col[index_col] = data_im[index_im];
+        // T temp = data_im[index_im];
       } else {
-        *data_col_ptr = 0;
+        data_col[index_col] = 0;
       }
-      data_col_ptr += data_col_inc;
+
       incremented = false;
       for (i = num_axes - 1; i >= 0; --i) {
-        const int d_max = shared_kernel_shape[i];
+        // const int d_max = shared_kernel_shape[i];
+        const int d_max = shared_col_shape[i + 1];
         if (d_iter[i] == d_max - 1) {
           d_iter[i] = 0;
         } else { // d_iter[i] < d_max - 1
@@ -1678,7 +2009,9 @@ void CopyMatrix<CUDAContext>(
     const int lda,
     void* B,
     const int ldb,
-    CUDAContext* context) {
+    CUDAContext* context,
+    TypeMeta::TypedCopy copy) {
+  CAFFE_ENFORCE(!copy, "Copy constructor is not supported in CUDA context");
   cudaMemcpy2DAsync(B, ldb * itemsize, A, lda * itemsize, N * itemsize, M,
                     cudaMemcpyDeviceToDevice, context->cuda_stream());
 }

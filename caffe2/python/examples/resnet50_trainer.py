@@ -1,4 +1,18 @@
-## @package resnet50_trainer
+# Copyright (c) 2016-present, Facebook, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+##############################################################################
+
 # Module caffe2.python.examples.resnet50_trainer
 from __future__ import absolute_import
 from __future__ import division
@@ -46,26 +60,48 @@ dyndep.InitOpsLibrary('@/caffe2/caffe2/distributed:file_store_handler_ops')
 dyndep.InitOpsLibrary('@/caffe2/caffe2/distributed:redis_store_handler_ops')
 
 
-def AddImageInput(model, reader, batch_size, img_size, dtype):
+def AddImageInput(model, reader, batch_size, img_size, dtype, is_test):
     '''
-    Image input operator that loads data from reader and
-    applies certain transformations to the images.
+    The image input operator loads image and label data from the reader and
+    applies transformations to the images (random cropping, mirroring, ...).
     '''
     data, label = brew.image_input(
         model,
         reader, ["data", "label"],
         batch_size=batch_size,
         output_type=dtype,
-        use_gpu_transform=True,
+        use_gpu_transform=True if model._device_type == 1 else False,
         use_caffe_datum=True,
         mean=128.,
         std=128.,
         scale=256,
         crop=img_size,
-        mirror=1
+        mirror=1,
+        is_test=is_test,
     )
 
     data = model.StopGradient(data, data)
+
+
+def AddNullInput(model, reader, batch_size, img_size, dtype):
+    '''
+    The null input function uses a gaussian fill operator to emulate real image
+    input. A label blob is hardcoded to a single value. This is useful if you
+    want to test compute throughput or don't have a dataset available.
+    '''
+    model.param_init_net.GaussianFill(
+        [],
+        ["data"],
+        shape=[batch_size, 3, img_size, img_size],
+        dtype=dtype,
+    )
+    model.param_init_net.ConstantFill(
+        [],
+        ["label"],
+        shape=[batch_size],
+        value=1,
+        dtype=core.DataType.INT32,
+    )
 
 
 def SaveModel(args, train_model, epoch):
@@ -300,6 +336,7 @@ def Train(args):
                 num_labels=args.num_labels,
                 no_bias=True,
                 no_loss=True,
+                fp16_data=True if args.dtype == 'float16' else False,
             )
 
         if args.dtype == 'float16':
@@ -313,35 +350,61 @@ def Train(args):
 
     def add_optimizer(model):
         stepsz = int(30 * args.epoch_size / total_batch_size / num_shards)
-        optimizer.add_weight_decay(model, args.weight_decay)
-        opt = optimizer.build_multi_precision_sgd(
-            model,
-            args.base_learning_rate,
-            momentum=0.9,
-            nesterov=1,
-            policy="step",
-            stepsize=stepsz,
-            gamma=0.1
-        )
+
+        if args.dtype == 'float16':
+            opt = optimizer.build_fp16_sgd(
+                model,
+                args.base_learning_rate,
+                momentum=0.9,
+                nesterov=1,
+                weight_decay=args.weight_decay,   # weight decay included
+                policy="step",
+                stepsize=stepsz,
+                gamma=0.1
+            )
+        else:
+            optimizer.add_weight_decay(model, args.weight_decay)
+            opt = optimizer.build_multi_precision_sgd(
+                model,
+                args.base_learning_rate,
+                momentum=0.9,
+                nesterov=1,
+                policy="step",
+                stepsize=stepsz,
+                gamma=0.1
+            )
         return opt
 
-    # Input. Note that the reader must be shared with all GPUS.
-    reader = train_model.CreateDB(
-        "reader",
-        db=args.train_data,
-        db_type=args.db_type,
-        num_shards=num_shards,
-        shard_id=shard_id,
-    )
-
-    def add_image_input(model):
-        AddImageInput(
-            model,
-            reader,
-            batch_size=batch_per_device,
-            img_size=args.image_size,
-            dtype=args.dtype,
+    # Define add_image_input function.
+    # Depends on the "train_data" argument.
+    # Note that the reader will be shared with between all GPUS.
+    if args.train_data == "null":
+        def add_image_input(model):
+            AddNullInput(
+                model,
+                None,
+                batch_size=batch_per_device,
+                img_size=args.image_size,
+                dtype=args.dtype,
+            )
+    else:
+        reader = train_model.CreateDB(
+            "reader",
+            db=args.train_data,
+            db_type=args.db_type,
+            num_shards=num_shards,
+            shard_id=shard_id,
         )
+
+        def add_image_input(model):
+            AddImageInput(
+                model,
+                reader,
+                batch_size=batch_per_device,
+                img_size=args.image_size,
+                dtype=args.dtype,
+                is_test=False,
+            )
 
     def add_post_sync_ops(model):
         """Add ops applied after initial parameter sync."""
@@ -363,7 +426,11 @@ def Train(args):
         rendezvous=rendezvous,
         optimize_gradient_memory=True,
         cpu_device=args.use_cpu,
+        shared_model=args.use_cpu,
     )
+
+    workspace.RunNetOnce(train_model.param_init_net)
+    workspace.CreateNet(train_model.net)
 
     # Add test model, if specified
     test_model = None
@@ -391,6 +458,7 @@ def Train(args):
                 batch_size=batch_per_device,
                 img_size=args.image_size,
                 dtype=args.dtype,
+                is_test=True,
             )
 
         data_parallel_model.Parallelize(
@@ -404,9 +472,6 @@ def Train(args):
         )
         workspace.RunNetOnce(test_model.param_init_net)
         workspace.CreateNet(test_model.net)
-
-    workspace.RunNetOnce(train_model.param_init_net)
-    workspace.CreateNet(train_model.net)
 
     epoch = 0
     # load the pre-trained model and reset epoch
@@ -463,9 +528,8 @@ def main():
     parser = argparse.ArgumentParser(
         description="Caffe2: Resnet-50 training"
     )
-    parser.add_argument("--train_data", type=str, default=None,
-                        help="Path to training data or 'everstore_sampler'",
-                        required=True)
+    parser.add_argument("--train_data", type=str, default=None, required=True,
+                        help="Path to training data (or 'null' to simulate)")
     parser.add_argument("--test_data", type=str, default=None,
                         help="Path to test data")
     parser.add_argument("--db_type", type=str, default="lmdb",

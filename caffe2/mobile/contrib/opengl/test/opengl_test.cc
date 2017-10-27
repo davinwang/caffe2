@@ -1,4 +1,19 @@
-// Copyright 2004-present Facebook. All Rights Reserved.
+/**
+ * Copyright (c) 2016-present, Facebook, Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 
 #include "opengl_test.h"
 
@@ -8,6 +23,7 @@
 #include "../core/ImageAllocator.h"
 #include "../core/arm_neon_support.h"
 #include "../core/rewrite_net.h"
+#include "../operators/gl_tiling_utils.h"
 
 #include "caffe2/core/logging.h"
 #include "caffe2/core/operator.h"
@@ -222,6 +238,17 @@ void testOpenGLCopyOps(int N, int C, int H, int W, float error, int tile_x = 1, 
   checkError(t1, t2, error);
 }
 
+typedef enum {
+  AveragePool,
+  MaxPool,
+  Conv,
+  ConvTranspose,
+  ConvPRelu,
+  ConvTransposePRelu,
+  ConvRelu,
+  ConvTransposeRelu
+} PoolOp;
+
 const char* glPoolOperationName[] = {"OpenGLAveragePool",
                                      "OpenGLMaxPool",
                                      "OpenGLConv",
@@ -251,12 +278,12 @@ void testOpenGLConv(int N,
                     int stride,
                     PoolOp poolOp,
                     float error,
-                    bool random_input,
-                    int input_batch_size,
-                    int output_batch_size,
-                    int input_tile_x,
-                    int input_tile_y,
-                    bool tiling) {
+                    bool random_input     = true,
+                    int input_batch_size  = 1,
+                    int output_batch_size = 1,
+                    int input_tile_x      = 1,
+                    int input_tile_y      = 1,
+                    bool tiling           = false) {
   LOG(INFO) << "OpenGL Conv Test: "
             << "input C: " << C << ", output C: " << K << ", H: " << H << ", W: " << W
             << ", K: " << kernel_w << "x" << kernel_h << ", P: " << pad << ", S: " << stride
@@ -647,8 +674,7 @@ void testOpenGLRelu(int N, int C, int H, int W, int input_tile_x, int input_tile
   checkError(ws.GetBlob("Y_cpu")->Get<TensorCPU>(), ws.GetBlob("Y_ref")->Get<TensorCPU>(), error);
 }
 
-void testOpenGLAdd(
-    int N, int C, int H, int W, float error = 0.1, int input_tile_x = 1, int input_tile_y = 1) {
+void testOpenGLAdd(int N, int C, int H, int W, float error = 0.1, int input_tile_x = 1, int input_tile_y = 1) {
   LOG(INFO) << "OpenGL Add Test "
             << "C: " << C << ", H: " << H << ", W: " << W;
   Workspace ws;
@@ -798,8 +824,7 @@ void testOpenGLSub(int N, int C, int H, int W, float error = 0.1) {
   checkError(t2, t1, error);
 }
 
-void testOpenGLConcat(
-    int N, std::vector<int> Cs, int H, int W, int batch_size = 1, float error = 0.1) {
+void testOpenGLConcat(int N, std::vector<int> Cs, int H, int W, bool tiling = false, float error = 0.1) {
   LOG(INFO) << "OpenGL Concat Test "
             << "H: " << H << ", W: " << W;
   Workspace ws;
@@ -817,6 +842,21 @@ void testOpenGLConcat(
     op.set_type("CopyToOpenGL");
     op.add_input("X_cpu" + caffe2::to_string(i));
     op.add_output("X_gl" + caffe2::to_string(i));
+    if (tiling) {
+      int tile_x = 1, tile_y = 1;
+      computeOutputTiles(Cs[i], tile_x, tile_y);
+      printf("Cs[i] = %d, tile_x = %d, tile_y = %d\n", Cs[i], tile_x, tile_y);
+      {
+        auto& arg = *(op.add_arg());
+        arg.set_name("tile_x");
+        arg.set_i(tile_x);
+      }
+      {
+        auto& arg = *(op.add_arg());
+        arg.set_name("tile_y");
+        arg.set_i(tile_y);
+      }
+    }
   }
 
   {
@@ -824,11 +864,6 @@ void testOpenGLConcat(
     op.set_type("OpenGLConcat");
     for (int i = 0; i < Cs.size(); i++) {
       op.add_input("X_gl" + caffe2::to_string(i));
-    }
-    {
-      auto& arg = *(op.add_arg());
-      arg.set_name("batch_size");
-      arg.set_i(batch_size);
     }
     {
       auto& arg = *(op.add_arg());
@@ -1035,16 +1070,17 @@ void testOpenGLMul(int N, int C, int H, int W, float error) {
   checkError(ws.GetBlob("Y_cpu")->Get<TensorCPU>(), ws.GetBlob("Y_ref")->Get<TensorCPU>(), error);
 }
 
-void testOpenGLSoftmax(int N, int D, float error) {
+void testOpenGLSoftmax(int N, int D, float error, bool tiled = false) {
   LOG(INFO) << "OpenGL Softmax Test "
-            << "N: " << N << " D: " << D;
+            << "N: " << N << " D: " << D << " Tiled:" << tiled;
   Workspace ws;
+  auto* t = ws.CreateBlob("X_cpu")->GetMutable<TensorCPU>();
   {
-    auto* t = ws.CreateBlob("X_cpu")->GetMutable<TensorCPU>();
     t->Resize(N, D);
     CPUContext ctx;
     // Too noisy.
-    math::RandGaussian<float, CPUContext>(t->size(), 0, 30, t->mutable_data<float>(), &ctx);
+    math::RandGaussian<float, CPUContext>(
+        t->size(), 0, 1, t->mutable_data<float>(), &ctx);
   }
 
   NetDef netdef;
@@ -1056,16 +1092,33 @@ void testOpenGLSoftmax(int N, int D, float error) {
     op.add_output("old_shape");
     auto& arg = *(op.add_arg());
     arg.set_name("shape");
-    arg.add_ints(N);
-    arg.add_ints(1);
-    arg.add_ints(D);
-    arg.add_ints(1);
+    if (tiled) {
+      arg.add_ints(N);
+      arg.add_ints(D);
+      arg.add_ints(1);
+      arg.add_ints(1);
+    } else {
+      arg.add_ints(N);
+      arg.add_ints(1);
+      arg.add_ints(D);
+      arg.add_ints(1);
+    }
   }
   {
     auto& op = *(netdef.add_op());
     op.set_type("CopyToOpenGL");
     op.add_input("X_reshaped");
     op.add_output("X_gl");
+    if (tiled) {
+      int tile_x = 1, tile_y = 1;
+      squareFactors((D + 3) / 4, tile_x, tile_y);
+      auto& argx = *(op.add_arg());
+      argx.set_name("tile_x");
+      argx.set_i(tile_x);
+      auto& argy = *(op.add_arg());
+      argy.set_name("tile_y");
+      argy.set_i(tile_y);
+    }
   }
 
   {
@@ -1102,9 +1155,8 @@ void testOpenGLSoftmax(int N, int D, float error) {
   }
 
   ws.RunNetOnce(netdef);
-  const auto& t2 = ws.GetBlob("Y_cpu")->Get<TensorCPU>(); // openGL
+  const auto& t2 = ws.GetBlob("Y_cpu")->Get<TensorCPU>(); // OpenGL
   const auto& t1 = ws.GetBlob("Y_ref")->Get<TensorCPU>(); // CPU
-
   checkError(ws.GetBlob("Y_cpu")->Get<TensorCPU>(), ws.GetBlob("Y_ref")->Get<TensorCPU>(), error);
 }
 
@@ -2159,8 +2211,7 @@ int runModelBenchmarks(caffe2::NetDef& init_net,
   if (engine == "CPU") {
     net_def.CopyFrom(predict_net);
   } else if (engine == "OPENGL") {
-    if (!caffe2::tryConvertToOpenGL(
-            init_net, predict_net, &net_def, use_texture_input, use_tiling, run_fusion)) {
+    if (!caffe2::tryConvertToOpenGL(init_net, predict_net, &net_def, use_texture_input, use_tiling, run_fusion)) {
       CAFFE_THROW("Failed to convert to openGL. Benchmark failed to run");
       return -1;
     }
@@ -2364,10 +2415,6 @@ void testGLTextureTypes() {
   gl_log(GL_LOG, "...done with %s\n", __PRETTY_FUNCTION__);
 }
 
-namespace caffe2 {
-  void squareFactors(int N, int& r1, int& r2);
-};
-
 void testOpenGL() {
   {
     // Test a bunch of different tiled convolutions
@@ -2375,7 +2422,7 @@ void testOpenGL() {
 
     for (const auto& input_channels : channels) {
       int tile_x = 1, tile_y = 1;
-      caffe2::squareFactors((input_channels + 3) / 4, tile_x, tile_y);
+      squareFactors((input_channels + 3) / 4, tile_x, tile_y);
 
       for (const auto& output_channels : channels) {
         for (int size = 5; size < 8; size *= 2) {
@@ -2503,7 +2550,7 @@ void testOpenGL() {
     }
     for (const auto& channel : channels) {
       int tile_x = 1, tile_y = 1;
-      caffe2::squareFactors((channel + 3) / 4, tile_x, tile_y);
+      squareFactors((channel + 3) / 4, tile_x, tile_y);
       // clang-format off
       testOpenGLConv(1, channel, 10, 10, channel, 3, 3, 0, 1, ConvPRelu, 0.1 * channel / 8, true, 1, 1, tile_x, tile_y, true);
       testOpenGLConv(1, channel, 10, 10, channel, 3, 3, 0, 1, ConvTransposePRelu, 0.1 * channel / 8, true, 1, 1, tile_x, tile_y, true);
@@ -2740,6 +2787,9 @@ void testOpenGL() {
     testOpenGLConcat(1, std::vector<int>{12, 16, 8}, 16, 16);
     testOpenGLConcat(1, std::vector<int>{60, 24, 36}, 16, 16);
 
+    testOpenGLConcat(1, std::vector<int>{12, 16, 8}, 16, 16, true);
+    testOpenGLConcat(1, std::vector<int>{60, 24, 36}, 16, 16, true);
+
     LOG(INFO) << "Test OpenGL Softmax";
     testOpenGLSoftmax(1, 100, 0.1);
     testOpenGLSoftmax(1, 500, 0.1);
@@ -2873,6 +2923,11 @@ void testOpenGL() {
     testOpenGLSoftmax(27, 100, 0.1);
 
     testOpenGLNormPlanarYUV(4, 3, 192, 192, 0.01);
+
+    // Test Tiling
+    testOpenGLSoftmax(3, 1000, 0.1, true);
+    testOpenGLSoftmax(9, 523, 0.1, true);
+    testOpenGLSoftmax(27, 100, 0.1, true);
   }
 
   LOG(INFO) << "End of OpenGL tests";

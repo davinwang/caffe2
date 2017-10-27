@@ -1,3 +1,19 @@
+/**
+ * Copyright (c) 2016-present, Facebook, Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #ifndef CAFFE2_OPERATORS_IF_OP_H_
 #define CAFFE2_OPERATORS_IF_OP_H_
 
@@ -15,15 +31,15 @@ class IfOp final : public Operator<Context> {
     CAFFE_ENFORCE(
         this->template HasSingleArgumentOfType<NetDef>("then_net"),
         "then_net must be specified in If operator");
-    then_net_def_ =
+    auto then_net_def =
         this->template GetSingleArgument<NetDef>("then_net", NetDef());
-    then_net_ = ws->CreateNet(then_net_def_, true);
+    then_net_ = CreateNet(then_net_def, ws);
     CAFFE_ENFORCE(then_net_, "Failed to initialize then subnet");
 
     if (this->template HasSingleArgumentOfType<NetDef>("else_net")) {
-      else_net_def_ =
+      auto else_net_def =
           this->template GetSingleArgument<NetDef>("else_net", NetDef());
-      else_net_ = ws->CreateNet(else_net_def_, true);
+      else_net_ = CreateNet(else_net_def, ws);
       CAFFE_ENFORCE(else_net_, "Failed to initialize else subnet");
     }
   }
@@ -32,11 +48,8 @@ class IfOp final : public Operator<Context> {
   bool RunOnDevice() override;
 
  private:
-  NetDef then_net_def_;
-  NetBase* then_net_ = nullptr;
-
-  NetDef else_net_def_;
-  NetBase* else_net_ = nullptr;
+  std::unique_ptr<NetBase> then_net_;
+  std::unique_ptr<NetBase> else_net_;
 };
 
 } // namespace caffe2

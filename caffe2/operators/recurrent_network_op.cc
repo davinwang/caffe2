@@ -1,5 +1,26 @@
+/**
+ * Copyright (c) 2016-present, Facebook, Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #include "recurrent_network_op.h"
 #include "caffe2/core/workspace.h"
+#include "caffe2/utils/proto_utils.h"
+
+#ifndef CAFFE2_RNN_NO_TEXT_FORMAT
+#include "google/protobuf/text_format.h"
+#endif
 
 CAFFE2_DEFINE_bool(
     caffe2_rnn_executor,
@@ -9,7 +30,7 @@ CAFFE2_DEFINE_bool(
 namespace caffe2 {
 CAFFE_KNOWN_TYPE(detail::ScratchWorkspaces);
 
-REGISTER_CPU_OPERATOR(RecurrentNetwork, RecurrentNetworkOp<float, CPUContext>);
+REGISTER_CPU_OPERATOR(RecurrentNetwork, RecurrentNetworkOp<CPUContext>);
 OPERATOR_SCHEMA(RecurrentNetwork)
     .NumInputs(1, INT_MAX)
     .NumOutputs(2, INT_MAX)
@@ -36,12 +57,12 @@ See the usage examples for a flavor of how to use it.
 
 REGISTER_CPU_OPERATOR(
     RecurrentNetworkGradient,
-    RecurrentNetworkGradientOp<float, CPUContext>);
+    RecurrentNetworkGradientOp<CPUContext>);
 OPERATOR_SCHEMA(RecurrentNetworkGradient);
 
 REGISTER_CPU_OPERATOR(
     rnn_internal_accumulate_gradient_input,
-    AccumulateInputGradientOp<float, CPUContext>);
+    AccumulateInputGradientOp<CPUContext>);
 OPERATOR_SCHEMA(rnn_internal_accumulate_gradient_input)
     .NumInputs(3)
     .NumOutputs(1, INT_MAX)
@@ -51,7 +72,7 @@ OPERATOR_SCHEMA(rnn_internal_accumulate_gradient_input)
 
 REGISTER_CPU_OPERATOR(
     rnn_internal_apply_link,
-    RNNApplyLinkOp<float, CPUContext>);
+    RNNApplyLinkOp<CPUContext>);
 OPERATOR_SCHEMA(rnn_internal_apply_link)
     .NumInputs(2)
     .NumOutputs(2)
@@ -228,6 +249,26 @@ void extractLinks(
     l.offset = offset[i];
     l.window = window[i];
     links->push_back(l);
+  }
+}
+
+NetDef extractNetDef(const OperatorDef& op, const std::string& argName) {
+  if (ArgumentHelper::HasSingleArgumentOfType<OperatorDef, NetDef>(
+          op, argName)) {
+    return ArgumentHelper::GetSingleArgument<OperatorDef, NetDef>(
+        op, argName, NetDef());
+  } else {
+#ifndef CAFFE2_RNN_NO_TEXT_FORMAT
+    NetDef result;
+    const auto netString =
+        ArgumentHelper::GetSingleArgument<OperatorDef, string>(op, argName, "");
+    CAFFE_ENFORCE(
+        google::protobuf::TextFormat::ParseFromString(netString, &result),
+        "Invalid NetDef");
+    return result;
+#else
+    CAFFE_THROW("No valid NetDef for argument ", argName);
+#endif
   }
 }
 } // namespace detail

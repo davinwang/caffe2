@@ -1,3 +1,19 @@
+/**
+ * Copyright (c) 2016-present, Facebook, Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #ifndef CAFFE2_CORE_OPERATOR_H_
 #define CAFFE2_CORE_OPERATOR_H_
 
@@ -22,7 +38,10 @@
 
 namespace caffe2 {
 
-class OperatorBase {
+class OperatorBase;
+typedef ObserverBase<OperatorBase> OperatorObserver;
+
+class OperatorBase : public Observable<OperatorBase> {
  public:
   explicit OperatorBase(const OperatorDef& operator_def, Workspace* ws);
   virtual ~OperatorBase() noexcept {}
@@ -169,14 +188,6 @@ class OperatorBase {
   }
 
  public:
-  void SetObserver(std::unique_ptr<ObserverBase<OperatorBase>> observer) {
-    observer_ = std::move(observer);
-  }
-
-  void RemoveObserver() {
-    observer_ = nullptr;
-  }
-
   void RecordLastFailedOpNetPosition() {
     if (net_position_ != kNoNetPositionSet) {
       VLOG(1) << "Operator with id " << net_position_ << " failed";
@@ -207,24 +218,28 @@ class OperatorBase {
     return operator_def_->type();
   }
 
+  void annotate_engine(const std::string& engine) {
+    engine_ = engine;
+  }
+
+  const std::string& engine() const {
+    return engine_;
+  }
+
  public:
   static constexpr int kNoNetPositionSet = -1;
-
-  ObserverBase<OperatorBase>* GetObserver() {
-    return observer_.get();
-  }
 
  private:
   Workspace* operator_ws_;
   std::shared_ptr<const OperatorDef> operator_def_;
   DeviceOption device_option_;
+  std::string engine_;
   vector<const Blob*> inputs_;
   vector<Blob*> outputs_;
 
   int net_position_{kNoNetPositionSet};
 
  protected:
-  std::unique_ptr<ObserverBase<OperatorBase>> observer_;
   // An event used by asynchronous execution.
   Event event_;
 
@@ -295,18 +310,16 @@ class Operator : public OperatorBase {
   // instead of Run().
   bool Run(int stream_id = 0) final {
     try {
-      if (observer_) {
-        observer_->Start();
-      }
+      StartAllObservers();
+
       context_.SwitchToDevice(stream_id);
       bool result = RunOnDevice();
       if (!result) {
         this->RecordLastFailedOpNetPosition();
       }
       context_.FinishDeviceComputation(); // throws on error
-      if (observer_) {
-        observer_->Stop();
-      }
+
+      StopAllObservers();
 
       return result;
     } catch (EnforceNotMet& err) {
@@ -652,6 +665,10 @@ unique_ptr<OperatorBase> CreateOperator(
     Workspace* ws,
     int net_position = OperatorBase::kNoNetPositionSet);
 
+const std::string OpRegistryKey(
+    const std::string& op_type,
+    const std::string& engine = "");
+
 // User can set the preferred engines as a list of engine names, in
 // descending order of preference.
 using EnginePrefType = std::vector<std::string>;
@@ -668,6 +685,8 @@ void SetEnginePref(
 void SetOpEnginePref(
     const std::string& op_type,
     const CaffeMap<int, EnginePrefType>& op_pref);
+
+TensorShape GetTensorShapeOfBlob(const Blob* b);
 
 TensorShapes InferBlobShapesAndTypesFromWorkspace(
     Workspace* ws,

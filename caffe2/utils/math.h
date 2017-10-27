@@ -1,3 +1,19 @@
+/**
+ * Copyright (c) 2016-present, Facebook, Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #ifndef CAFFE2_UTILS_MATH_H_
 #define CAFFE2_UTILS_MATH_H_
 // This is a simple translation from the old Caffe math interfaces. We aim to
@@ -218,6 +234,27 @@ void GemmEx(
     const int ldc,
     Context* context);
 
+// GemmBatched provides a simple abstraction into library routines
+template <typename T, class Context, class Engine = DefaultEngine>
+void GemmBatched(
+    const CBLAS_TRANSPOSE TransA,
+    const CBLAS_TRANSPOSE TransB,
+    const int A_size,
+    const int A_batches,
+    const int B_size,
+    const int B_batches,
+    const int M,
+    const int N,
+    const int K,
+    const float alpha,
+    const T* A,
+    const T* B,
+    const float beta,
+    T* C,
+    Context* context,
+    Tensor<Context>* scratch = nullptr,
+    TensorProto::DataType math_type = TensorProto_DataType_FLOAT);
+
 // Gemv always takes in a M*N matrix A, and depending on whether we set TransA
 // to Trans, the output is:
 // CblasNoTrans: x is an N dim vector and y is an M dim vector.
@@ -391,8 +428,16 @@ void BiasCHW(
   Context* context);
 
 template <class Context>
-void CopyMatrix(const size_t item_size, const int M, const int N, const void* A,
-                const int lda, void* B, const int ldb, Context* context);
+void CopyMatrix(
+    const size_t item_size,
+    const int M,
+    const int N,
+    const void* A,
+    const int lda,
+    void* B,
+    const int ldb,
+    Context* context,
+    TypeMeta::TypedCopy copy = nullptr);
 
 template <typename T, class Context>
 void CopyVector(const int N, const T* A, T* B, Context* context);

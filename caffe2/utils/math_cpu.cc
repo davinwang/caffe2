@@ -1,3 +1,19 @@
+/**
+ * Copyright (c) 2016-present, Facebook, Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 // Implements the math functions for CPU.
 // The implementation in this file allows us to route the underlying numerical
 // computation library to different backends. Notably:
@@ -399,6 +415,45 @@ CAFFE2_SPECIALIZED_AXPBY(float, s)
 
 #endif  // CAFFE2_USE_EIGEN_FOR_BLAS
 
+template <>
+void GemmBatched<float, CPUContext>(
+    const CBLAS_TRANSPOSE TransA,
+    const CBLAS_TRANSPOSE TransB,
+    const int A_size,
+    const int A_batches,
+    const int B_size,
+    const int B_batches,
+    const int M,
+    const int N,
+    const int K,
+    const float alpha,
+    const float* A,
+    const float* B,
+    const float beta,
+    float* C,
+    CPUContext* context,
+    Tensor<CPUContext>*, /* scratch */
+    TensorProto::DataType /* math_type */) {
+
+  auto a_offset = A_size / A_batches;
+  auto b_offset = B_size / B_batches;
+  auto y_offset = M * N;
+  // loop over matrices in the batch
+  for (int i = 0; i < A_batches; ++i) {
+    math::Gemm<float, CPUContext>(
+        TransA,
+        TransB,
+        M,
+        N,
+        K,
+        1,
+        A + a_offset * i,
+        B + b_offset * i,
+        0,
+        C + y_offset * i,
+        context);
+  }
+}
 
 ////////////////////////////////////////////////////////////////////////////////
 // MKL VML alternatives.
@@ -1375,18 +1430,31 @@ void CopyMatrix<CPUContext>(
     const int lda,
     void* B,
     const int ldb,
-    CPUContext* /*context*/) {
+    CPUContext* /*context*/,
+    TypeMeta::TypedCopy copy) {
   if (lda == N && ldb == N) {
     // can coalese to a single memcpy of size M * N
-    memcpy(
-        static_cast<char*>(B), static_cast<const char*>(A), itemsize * N * M);
+    if (copy) {
+      copy(static_cast<const char*>(A), static_cast<char*>(B), N * M);
+    } else {
+      memcpy(
+          static_cast<char*>(B), static_cast<const char*>(A), itemsize * N * M);
+    }
     return;
   }
 
   for (int i = 0; i < M; ++i) {
-    memcpy(static_cast<char*>(B) + ldb * i * itemsize,
-           static_cast<const char*>(A) + lda * i * itemsize,
-           itemsize * N);
+    if (copy) {
+      copy(
+          static_cast<const char*>(A) + lda * i * itemsize,
+          static_cast<char*>(B) + ldb * i * itemsize,
+          N);
+    } else {
+      memcpy(
+          static_cast<char*>(B) + ldb * i * itemsize,
+          static_cast<const char*>(A) + lda * i * itemsize,
+          itemsize * N);
+    }
   }
 }
 

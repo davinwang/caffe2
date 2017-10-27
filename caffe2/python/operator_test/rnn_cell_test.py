@@ -1,3 +1,18 @@
+# Copyright (c) 2016-present, Facebook, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+##############################################################################
+
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
@@ -13,7 +28,7 @@ from caffe2.proto import caffe2_pb2
 import caffe2.python.hypothesis_test_util as hu
 
 from functools import partial
-from hypothesis import given
+from hypothesis import assume, given
 from hypothesis import settings as ht_settings
 import hypothesis.strategies as st
 import numpy as np
@@ -703,6 +718,7 @@ def _prepare_attention(t, n, dim_in, encoder_dim,
                 dropout_ratio=0.0,
                 name='dropout',
                 forward_only=forward_only,
+                is_test=False,
             )
 
         attention_cell = (
@@ -1062,18 +1078,15 @@ class RNNCellTest(hu.HypothesisTestCase):
         self.assertTrue(workspace.RunNet(predict_net.Proto().name))
 
         # Validate device options set correctly for the RNNs
-        import google.protobuf.text_format as protobuftx
         for op in predict_net.Proto().op:
             if op.type == 'RecurrentNetwork':
                 for arg in op.arg:
                     if arg.name == "step_net":
-                        step_proto = caffe2_pb2.NetDef()
-                        protobuftx.Merge(arg.s.decode("ascii"), step_proto)
-                        for step_op in step_proto.op:
+                        for step_op in arg.n.op:
                             self.assertEqual(0, step_op.device_option.device_type)
                             self.assertEqual(1, step_op.device_option.cuda_gpu_id)
                     elif arg.name == 'backward_step_net':
-                        self.assertEqual(b"", arg.s)
+                        self.assertEqual(caffe2_pb2.NetDef(), arg.n)
 
     def test_lstm_params(self):
         model = ModelHelper(name="lstm_params_test")
@@ -1394,8 +1407,14 @@ class RNNCellTest(hu.HypothesisTestCase):
     @given(n=st.integers(1, 10),
            d=st.integers(1, 10),
            t=st.integers(1, 10),
+           dtype=st.sampled_from([np.float32, np.float16]),
            **hu.gcs)
-    def test_lstm_unit_recurrent_network(self, n, d, t, dc, gc):
+    def test_lstm_unit_recurrent_network(self, n, d, t, dtype, dc, gc):
+        if dtype == np.float16:
+            # only supported with CUDA
+            assume(gc.device_type == caffe2_pb2.CUDA)
+            dc = [do for do in dc if do.device_type == caffe2_pb2.CUDA]
+
         op = core.CreateOperator(
             'LSTMUnit',
             [
@@ -1406,9 +1425,9 @@ class RNNCellTest(hu.HypothesisTestCase):
                 'timestep',
             ],
             ['hidden_t', 'cell_t'])
-        cell_t_prev = np.random.randn(1, n, d).astype(np.float32)
-        hidden_t_prev = np.random.randn(1, n, d).astype(np.float32)
-        gates = np.random.randn(1, n, 4 * d).astype(np.float32)
+        cell_t_prev = np.random.randn(1, n, d).astype(dtype)
+        hidden_t_prev = np.random.randn(1, n, d).astype(dtype)
+        gates = np.random.randn(1, n, 4 * d).astype(dtype)
         seq_lengths = np.random.randint(1, t + 1, size=(n,)).astype(np.int32)
         timestep = np.random.randint(0, t, size=(1,)).astype(np.int32)
         inputs = [hidden_t_prev, cell_t_prev, gates, seq_lengths, timestep]
@@ -1416,13 +1435,25 @@ class RNNCellTest(hu.HypothesisTestCase):
         self.assertDeviceChecks(
             dc, op, inputs, [0],
             input_device_options=input_device_options)
+
+        kwargs = {}
+        if dtype == np.float16:
+            kwargs['threshold'] = 1e-1  # default is 1e-4
+
         self.assertReferenceChecks(
             gc, op, inputs, lstm_unit,
-            input_device_options=input_device_options)
+            input_device_options=input_device_options,
+            **kwargs)
+
+        kwargs = {}
+        if dtype == np.float16:
+            kwargs['threshold'] = 0.5  # default is 0.005
+
         for i in range(2):
             self.assertGradientChecks(
                 gc, op, inputs, i, [0, 1],
-                input_device_options=input_device_options)
+                input_device_options=input_device_options,
+                **kwargs)
 
     @given(input_length=st.integers(2, 5),
            dim_in=st.integers(1, 3),

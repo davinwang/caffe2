@@ -1,3 +1,19 @@
+/**
+ * Copyright (c) 2016-present, Facebook, Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #ifndef CAFFE2_CORE_NET_H_
 #define CAFFE2_CORE_NET_H_
 
@@ -29,9 +45,10 @@ typedef std::function<std::unique_ptr<NetObserver>(NetBase*)>
 
 class OperatorBase;
 class Workspace;
+
 // Net is a thin struct that owns all the operators together with the operator
 // contexts.
-class NetBase {
+class NetBase : public Observable<NetBase> {
  public:
   NetBase(const std::shared_ptr<const NetDef>& net_def, Workspace* ws);
   virtual ~NetBase() noexcept {}
@@ -83,18 +100,6 @@ class NetBase {
    */
   virtual vector<OperatorBase*> GetOperators() const = 0;
 
-  void SetObserver(std::unique_ptr<NetObserver> observer) {
-    observer_ = std::move(observer);
-  }
-
-  void RemoveObserver() {
-    observer_ = nullptr;
-  }
-
-  NetObserver* GetObserver() {
-    return observer_.get();
-  }
-
   const string& Name() const {
     return name_;
   }
@@ -103,7 +108,6 @@ class NetBase {
   vector<string> external_input_;
   vector<string> external_output_;
   string name_;
-  std::unique_ptr<NetObserver> observer_;
   vector<const Event*> events_;
 
   DISABLE_COPY_AND_ASSIGN(NetBase);

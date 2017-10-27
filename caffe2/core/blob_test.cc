@@ -1,3 +1,19 @@
+/**
+ * Copyright (c) 2016-present, Facebook, Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #include <iostream>
 #include <memory>
 #include <mutex>
@@ -136,13 +152,32 @@ TEST(TensorNonTypedTest, TensorChangeType) {
   dims[1] = 3;
   dims[2] = 5;
   TensorCPU tensor(dims);
-  EXPECT_TRUE(tensor.mutable_data<int>() != nullptr);
+
+  auto* ptr = tensor.mutable_data<int>();
+  EXPECT_TRUE(ptr != nullptr);
   EXPECT_TRUE(tensor.data<int>() != nullptr);
   EXPECT_TRUE(tensor.meta().Match<int>());
 
-  EXPECT_TRUE(tensor.mutable_data<float>() != nullptr);
-  EXPECT_TRUE(tensor.data<float>() != nullptr);
+  // int and float are same size, so should retain the pointer
+  EXPECT_TRUE(tensor.mutable_data<float>() == (float*)ptr);
+  EXPECT_TRUE(tensor.data<float>() == (const float*)ptr);
   EXPECT_TRUE(tensor.meta().Match<float>());
+
+  // float16 is smaller, so still should share buffer
+  EXPECT_TRUE(tensor.mutable_data<float16>() == (float16*)ptr);
+  EXPECT_TRUE(tensor.data<float16>() == (const float16*)ptr);
+  EXPECT_TRUE(tensor.meta().Match<float16>());
+
+  // share the data with other tensor so that the pointer won't be reused
+  // when we reallocate
+  TensorCPU other_tensor(dims);
+  other_tensor.ShareData(tensor);
+  // but double is bigger, so it should allocate a new one
+  auto* doubleptr = tensor.mutable_data<double>();
+  EXPECT_TRUE(doubleptr != (double*)ptr);
+  EXPECT_TRUE(doubleptr != nullptr);
+  EXPECT_TRUE(tensor.data<double>() != nullptr);
+  EXPECT_TRUE(tensor.meta().Match<double>());
 }
 
 template <typename T> class TensorCPUTest : public ::testing::Test {};

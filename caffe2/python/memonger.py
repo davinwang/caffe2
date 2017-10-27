@@ -1,3 +1,18 @@
+# Copyright (c) 2016-present, Facebook, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+##############################################################################
+
 ## @package memonger
 # Module caffe2.python.memonger
 from __future__ import absolute_import
@@ -283,7 +298,7 @@ def _find_source_nodes(g):
     ''' Return nodes without predecessors '''
     ret = []
     for cn in g:
-        cur_pred = g.predecessors(cn)
+        cur_pred = list(g.predecessors(cn))
         if not cur_pred:
             ret.append(cn)
     return ret
@@ -293,7 +308,7 @@ def _find_target_nodes(g):
     ''' Return nodes without successors '''
     ret = []
     for cn in g:
-        cur_succ = g.successors(cn)
+        cur_succ = list(g.successors(cn))
         if not cur_succ:
             ret.append(cn)
     return ret
@@ -332,9 +347,17 @@ def _get_path(pred_list, dist_list):
 
     ret = []
     cur = target
+
+
     while cur is not None:
         ret.append(cur)
-        cur = pred_list[cur]
+        # Hack to get networkx 2.0 happy: it uses list in pred.
+        # TODO(tulloch): are there cases with multiple predecessors?
+        try:
+            cur = pred_list[cur][0]
+        except TypeError:
+            cur = pred_list[cur]
+
     return list(reversed(ret))
 
 
@@ -381,7 +404,7 @@ def _compute_tree_height(g, root):
         Height of leaves are 0
     '''
     def _get_height(root):
-        children = g.successors(root)
+        children = list(g.successors(root))
         height = 0
         if children:
             child_heights = [_get_height(x) for x in children]
@@ -400,7 +423,7 @@ def _sort_tree_leaves(g, root):
         return g.node[root]["height"]
 
     def _get_sorted_leaves(root):
-        children = g.successors(root)
+        children = list(g.successors(root))
         if not children:
             return [root]
         child_heights = [_get_height(x) for x in children]
@@ -436,13 +459,28 @@ def topological_sort_traversal_longest_path(g):
     sorted_sources = _sort_tree_leaves(tree, root)
     assert(sorted(sorted_sources) == sorted(source_nodes))
 
-    ret = nx.topological_sort(g, sorted_sources)
+    if nx.__version__ < '2.0':
+        ret = nx.topological_sort(g, sorted_sources)
+    else:
+        # Manually making a sorted descendent list
+        dependency_order = list(sorted_sources)
+        seen_nodes = set(sorted_sources)
+        for s in sorted_sources:
+            desc = nx.descendants(g, s)
+            for d in desc:
+                if d not in seen_nodes:
+                    seen_nodes.add(d)
+                    dependency_order.append(d)
+        sort_key = dict((v, len(dependency_order) - i) for i, v in enumerate(dependency_order))
+        ret = nx.algorithms.dag.lexicographical_topological_sort(
+            g, key=lambda x: sort_key[x])
+        ret = list(ret)
     assert(len(ret) == len(g.node))
     return ret
 
 
 def topological_sort_traversal(g):
-    return nx.topological_sort(g)
+    return list(nx.topological_sort(g))
 
 
 def compute_ranges(linearized_ops, blob_sizes=None):
@@ -779,16 +817,12 @@ def apply_assignments(net, blob_assignments):
 
 def apply_recurrent_blob_assignments(op, blob_assignments, canonical_name):
     log.debug("Applying assignments to recurrent op: {}".format(op.type))
-    import google.protobuf.text_format as protobuftx
     step_args = [a for a in op.arg if a.name.endswith("step_net")]
     for step_arg in step_args:
-        step_proto = caffe2_pb2.NetDef()
-        protobuftx.Merge(step_arg.s.decode("ascii"), step_proto)
-        apply_assignments(step_proto, blob_assignments)
-        for i, einp in enumerate(step_proto.external_input):
+        apply_assignments(step_arg.n, blob_assignments)
+        for i, einp in enumerate(step_arg.n.external_input):
             if einp in blob_assignments:
-                step_proto.external_input[i] = canonical_name(einp)
-        step_arg.s = str(step_proto).encode("ascii")
+                step_arg.n.external_input[i] = canonical_name(einp)
     # Store renamings
     for blob, renamed in viewitems(blob_assignments):
         if blob in list(op.input) + list(op.output):

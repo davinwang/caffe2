@@ -1,3 +1,18 @@
+# Copyright (c) 2016-present, Facebook, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+##############################################################################
+
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
@@ -45,7 +60,17 @@ class TestShapeInference(test_util.TestCase):
         model = model_helper.ModelHelper(name="test_model")
         model.net.Slice(["x"], ["y"], starts=[0, 0, 0, 0], ends=[-1, -1, -3, -1])
         workspace.FeedBlob("x", np.random.rand(64, 1, 255, 384).astype(np.float32))
-        self.InferTensorRunAndCompare(model)
+
+        slice_starts = np.array([0, 0, 0, 0]).astype(np.int32)
+        slice_ends = np.array([-1, -1, -3, -1]).astype(np.int32)
+        slice_starts = model.net.GivenTensorIntFill(
+            [], shape=[4], values=slice_starts)
+        slice_ends = model.net.GivenTensorIntFill(
+            [], shape=[4], values=slice_ends)
+        model.net.Slice(["x2", slice_starts, slice_ends], ["y2"])
+        workspace.FeedBlob("x2", np.random.rand(64, 1, 255, 384).astype(np.float32))
+
+        self.InferTensorRunAndCompare(model, ["y2"])
 
     def testShapeInferenceDistances(self):
         model = model_helper.ModelHelper(name="test_model")
@@ -75,6 +100,8 @@ class TestShapeInference(test_util.TestCase):
         model.net.ReduceBackMean(["x"], ["x_back_mean"])
         model.net.ReduceFrontSum(["x"], ["x_front_sum"])
         model.net.ReduceFrontMean(["x"], ["x_front_mean"])
+        model.net.ReduceFrontMax(["x"], ["x_front_max"])
+
         workspace.FeedBlob("x", np.random.rand(10, 12, 18).astype(np.float32))
         self.InferTensorRunAndCompare(model)
 
@@ -91,11 +118,11 @@ class TestShapeInference(test_util.TestCase):
         brew.conv(model, "data_nchw", 'conv1', 3, 64,
                    weight_init=("MSRAFill", {}), kernel=7,
                    stride=2, pad=3, no_bias=0)
-        brew.spatial_bn(model, 'conv1', 'conv1_spatbn_relu', 64, epsilon=1e-3)
+        brew.spatial_bn(model, 'conv1', 'conv1_spatbn_relu', 64, epsilon=1e-3, is_test=False)
         brew.relu(model, 'conv1_spatbn_relu', 'conv1_spatbn_relu')
         brew.max_pool(model, 'conv1_spatbn_relu', 'pool1', kernel=3, stride=2)
         brew.fc(model, 'pool1', 'fc', dim_in=(64 * 56 * 56), dim_out=100)
-        brew.dropout(model, 'fc', 'fc_drop')
+        brew.dropout(model, 'fc', 'fc_drop', is_test=False)
         model.Sigmoid('fc_drop', 'fc_sigm')
         brew.softmax(model, 'fc_sigm', 'softmax')
         model.LabelCrossEntropy(['softmax', 'label'], 'xent')
@@ -330,7 +357,7 @@ class TestShapeInference(test_util.TestCase):
 
         self.InferTensorRunAndCompare(model)
 
-
+        # test Flatten with default axis (=1)
         model = model_helper.ModelHelper(name="test_model")
         model.Flatten("X", "Flat")
         model.Flatten("empty", "EmptyFlat")
@@ -338,6 +365,20 @@ class TestShapeInference(test_util.TestCase):
         workspace.FeedBlob("empty", np.random.rand(0, 2, 3).astype(np.float32))
 
         self.InferTensorRunAndCompare(model)
+
+        # test Flatten with axis
+        model = model_helper.ModelHelper(name="test_model")
+        x = np.random.randn(17, 5, 13)
+        for axis in range(x.ndim + 1):
+            model.Flatten("x", "Flat", axis=axis)
+            workspace.FeedBlob("x", x)
+            self.InferTensorRunAndCompare(model)
+
+        empty = np.random.randn(0, 5, 13)
+        for axis in range(empty.ndim + 1):
+            model.Flatten("empty", "Flat", axis=axis)
+            workspace.FeedBlob("empty", empty)
+            self.InferTensorRunAndCompare(model)
 
     def testShapeInferenceReshape(self):
         model = model_helper.ModelHelper(name="test_model")
@@ -432,10 +473,13 @@ class TestShapeInference(test_util.TestCase):
                 np.random.rand(2, 5).astype(np.float32))
             self.InferTensorRunAndCompare(model)
 
-    def InferTensorRunAndCompare(self, model):
+    def InferTensorRunAndCompare(self, model, expected_uninferred_blobs=None):
         '''
         Runs shape inference, and then the model to check
         that the inferred shapes agree with the actual ones
+
+        'expected_uninferred_blobs' is the list of blobs for which type and
+        shape cannot be inferred.
         '''
         (shapes, types) = workspace.InferShapesAndTypes(
             [model.param_init_net, model.net],
@@ -480,7 +524,12 @@ class TestShapeInference(test_util.TestCase):
             else:
                 correct_types[b] = str(type(arr))
 
+        if expected_uninferred_blobs is None:
+            expected_uninferred_blobs = []
         for b in correct_shapes:
+            # skip blobs for which shape couldn't be inferred
+            if b in expected_uninferred_blobs:
+                continue
             self.assertTrue(
                 np.array_equal(
                     np.array(shapes[b]).astype(np.int32),

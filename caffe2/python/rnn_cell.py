@@ -1,3 +1,18 @@
+# Copyright (c) 2016-present, Facebook, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+##############################################################################
+
 ## @package rnn_cell
 # Module caffe2.python.rnn_cell
 from __future__ import absolute_import
@@ -257,12 +272,10 @@ class LSTMCell(RNNCell):
 
         if extra_inputs is not None:
             extra_input_blobs, extra_input_sizes = zip(*extra_inputs)
-            fc_input, _ = model.net.Concat(
+            fc_input = brew.concat(
+                model,
                 [hidden_t_prev] + list(extra_input_blobs),
-                [
-                    self.scope('gates_concatenated_input_t'),
-                    self.scope('_gates_concatenated_input_t_concat_dims'),
-                ],
+                self.scope('gates_concatenated_input_t'),
                 axis=2,
             )
             fc_input_dim += sum(extra_input_sizes)
@@ -275,7 +288,7 @@ class LSTMCell(RNNCell):
             dim_out=4 * self.hidden_size,
             axis=2,
         )
-        model.net.Sum([gates_t, input_t], gates_t)
+        brew.sum(model, [gates_t, input_t], gates_t)
 
         hidden_t, cell_t = model.net.LSTMUnit(
             [
@@ -341,12 +354,10 @@ class MILSTMCell(LSTMCell):
 
         if extra_inputs is not None:
             extra_input_blobs, extra_input_sizes = zip(*extra_inputs)
-            fc_input, _ = model.net.Concat(
+            fc_input = brew.concat(
+                model,
                 [hidden_t_prev] + list(extra_input_blobs),
-                [
-                    self.scope('gates_concatenated_input_t'),
-                    self.scope('_gates_concatenated_input_t_concat_dims'),
-                ],
+                self.scope('gates_concatenated_input_t'),
                 axis=2,
             )
             fc_input_dim += sum(extra_input_sizes)
@@ -405,7 +416,8 @@ class MILSTMCell(LSTMCell):
         )
         # alpha * input_t * prev_t + beta_h * prev_t + beta_i * input_t + b
         # Shape: [1, batch_size, 4 * hidden_size]
-        gates_t = model.net.Sum(
+        gates_t = brew.sum(
+            model,
             [alpha_by_input_t_plus_beta_h_by_prev_t, beta_i_by_input_t_plus_b],
             self.scope('gates_t')
         )
@@ -430,9 +442,18 @@ class DropoutCell(RNNCell):
     recurrent connection for the corresponding state).
     '''
 
-    def __init__(self, internal_cell, dropout_ratio=None, **kwargs):
+    def __init__(
+        self,
+        internal_cell,
+        dropout_ratio=None,
+        use_cudnn=False,
+        **kwargs
+    ):
         self.internal_cell = internal_cell
         self.dropout_ratio = dropout_ratio
+        assert 'is_test' in kwargs, "Argument 'is_test' is required"
+        self.is_test = kwargs.pop('is_test')
+        self.use_cudnn = use_cudnn
         super(DropoutCell, self).__init__(**kwargs)
 
         self.prepare_input = internal_cell.prepare_input
@@ -481,13 +502,13 @@ class DropoutCell(RNNCell):
     def _apply_dropout(self, model, output):
         if self.dropout_ratio and not self.forward_only:
             with core.NameScope(self.name or ''):
-                output, _ = model.net.Dropout(
+                output = brew.dropout(
+                    model,
                     output,
-                    [
-                        str(output) + '_with_dropout_mask{}'.format(self.mask),
-                        str(output) + '_dropout_mask{}'.format(self.mask),
-                    ],
+                    str(output) + '_with_dropout_mask{}'.format(self.mask),
                     ratio=float(self.dropout_ratio),
+                    is_test=self.is_test,
+                    use_cudnn=self.use_cudnn,
                 )
                 self.mask += 1
         return output
@@ -622,7 +643,8 @@ class MultiRNNCell(RNNCell):
                     layer_next_states,
                 )
                 if i > 0 and i in self.residual_output_layers:
-                    layer_input = model.net.Sum(
+                    layer_input = brew.sum(
+                        model,
                         [layer_output, layer_input],
                         self.scope('residual_output_{}'.format(i)),
                     )
@@ -655,11 +677,14 @@ class MultiRNNCell(RNNCell):
                 )
                 connected_outputs.append(layer_output)
             state_index += num_states
-
-        output = model.net.Sum(
-            connected_outputs,
-            self.scope('residual_output'),
-        )
+        if len(connected_outputs) > 1:
+            output = brew.sum(
+                model,
+                connected_outputs,
+                self.scope('residual_output'),
+            )
+        else:
+            output = connected_outputs[0]
         return output
 
     def _prepare_output_sequence(self, model, states):
@@ -675,11 +700,14 @@ class MultiRNNCell(RNNCell):
                 )
                 connected_outputs.append(layer_output)
             state_index += num_states
-
-        output = model.net.Sum(
-            connected_outputs,
-            self.scope('residual_output_sequence'),
-        )
+        if len(connected_outputs) > 1:
+            output = brew.sum(
+                model,
+                connected_outputs,
+                self.scope('residual_output_sequence'),
+            )
+        else:
+            output = connected_outputs[0]
         return output
 
 
@@ -930,12 +958,10 @@ class AttentionCell(RNNCell):
             attention_context = states[-1]
 
         with core.NameScope(self.name or ''):
-            output, _ = model.net.Concat(
+            output = brew.concat(
+                model,
                 [self.hidden_t_intermediate, attention_context],
-                [
-                    'states_and_context_combination',
-                    '_states_and_context_combination_concat_dims',
-                ],
+                'states_and_context_combination',
                 axis=2,
             )
 
@@ -958,15 +984,13 @@ class AttentionCell(RNNCell):
             attention_context_index = 2 * (len(self.get_state_names()) - 1)
 
         with core.NameScope(self.name or ''):
-            output, _ = model.net.Concat(
+            output = brew.concat(
+                model,
                 [
                     decoder_output,
                     state_outputs[attention_context_index],
                 ],
-                [
-                    'states_and_context_combination',
-                    '_states_and_context_combination_concat_dims',
-                ],
+                'states_and_context_combination',
                 axis=2,
             )
         return output

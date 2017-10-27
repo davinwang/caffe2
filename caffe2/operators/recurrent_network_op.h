@@ -1,3 +1,19 @@
+/**
+ * Copyright (c) 2016-present, Facebook, Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #ifndef CAFFE2_OPERATORS_RECURRENT_NETWORK_OP_H_
 #define CAFFE2_OPERATORS_RECURRENT_NETWORK_OP_H_
 
@@ -6,7 +22,7 @@
 #include "caffe2/core/operator.h"
 #include "caffe2/core/tensor.h"
 #include "caffe2/operators/recurrent_network_executor.h"
-#include "google/protobuf/text_format.h"
+#include "caffe2/utils/conversions.h"
 
 CAFFE2_DECLARE_bool(caffe2_rnn_executor);
 
@@ -87,6 +103,18 @@ void applyOffsetAlias(
       dst->size());
 }
 
+template <typename T, class Context>
+void repeatCopy(
+    size_t repeat_n,
+    size_t n,
+    const T* src,
+    T* dst,
+    Context* context) {
+  for (int i = 0; i < repeat_n; ++i) {
+    context->template Copy<T, Context, Context>(n, src, dst + i * n);
+  }
+}
+
 /**
  * Copy external input to the step net into the first item of
  * (T + 1) X batch_size X input_size tensor
@@ -127,14 +155,14 @@ void initializeRecurrentInput(
         input.template data<T>(),
         state->template mutable_data<T>());
   } else {
-    for (int i = 0; i < batchSize; ++i) {
-      // Usually, the initial state is the same for all inputs in the batch.
-      // So the op conveniently accepts 1-D input and copies it batchSize times.
-      context->template Copy<T, Context, Context>(
+    // Usually, the initial state is the same for all inputs in the batch.
+    // So the op conveniently accepts 1-D input and copies it batchSize times.
+    repeatCopy<T, Context>(
+          batchSize,
           stateSize,
           input.template data<T>(),
-          state->template mutable_data<T>() + i * stateSize);
-    }
+          state->template mutable_data<T>(),
+          context);
   }
 }
 
@@ -153,9 +181,11 @@ void extractLinks(
     const std::string& offsetArg,
     const std::string& windowArg,
     std::vector<detail::Link>* links);
+
+NetDef extractNetDef(const OperatorDef& op, const std::string& argName);
 } // namespace detail
 
-template <typename T, class Context>
+template <class Context>
 class RecurrentNetworkOp final : public Operator<Context> {
  public:
   USE_OPERATOR_CONTEXT_FUNCTIONS;
@@ -169,11 +199,8 @@ class RecurrentNetworkOp final : public Operator<Context> {
             "timestep",
             "timestep")) {
     CAFFE_ENFORCE(ws);
-    const auto stepNet =
-        OperatorBase::GetSingleArgument<string>("step_net", "");
-    CAFFE_ENFORCE(
-        google::protobuf::TextFormat::ParseFromString(stepNet, &stepNetDef_),
-        "Invalid netdef");
+
+    stepNetDef_ = detail::extractNetDef(operator_def, "step_net");
 
     recurrentInputs_ = constructRecurrentInputs(operator_def, sharedWs_);
     links_ = constructLinks();
@@ -273,7 +300,8 @@ class RecurrentNetworkOp final : public Operator<Context> {
     return links;
   }
 
-  bool RunOnDevice() {
+  template<typename T>
+  bool DoRunWithType() {
     const auto seqLen = Input(0).dim32(0);
     const auto batchSize = Input(0).dim32(1);
     for (const auto& ri : recurrentInputs_) {
@@ -283,9 +311,11 @@ class RecurrentNetworkOp final : public Operator<Context> {
 
     // If we don't have a backward step net, this operator is forward_only
     // and we can avoid creating multiple workspaces.
-
     bool has_backward_pass =
-        OperatorBase::GetSingleArgument<string>("backward_step_net", "") != "";
+        OperatorBase::HasSingleArgumentOfType<NetDef>("backward_step_net") ||
+        (OperatorBase::HasSingleArgumentOfType<string>("backward_step_net") &&
+         OperatorBase::GetSingleArgument<string>("backward_step_net", "") !=
+             "");
 
     // With backward pass: we need to create workspace for each timestep
     detail::ScratchWorkspaces* scratch =
@@ -356,6 +386,10 @@ class RecurrentNetworkOp final : public Operator<Context> {
     return true;
   }
 
+  bool RunOnDevice() {
+    return DoRunWithType<float>();
+  }
+
  protected:
   NetDef stepNetDef_;
   Workspace* sharedWs_;
@@ -368,7 +402,7 @@ class RecurrentNetworkOp final : public Operator<Context> {
   std::string timestep_;
 };
 
-template <typename T, class Context>
+template <class Context>
 class RecurrentNetworkGradientOp final : public Operator<Context> {
  public:
   USE_OPERATOR_CONTEXT_FUNCTIONS;
@@ -384,15 +418,8 @@ class RecurrentNetworkGradientOp final : public Operator<Context> {
         gradInputs_(OperatorBase::template GetRepeatedArgument<int32_t>(
             "outputs_with_grads")) {
     CAFFE_ENFORCE(ws);
-    const auto stepNet =
-        OperatorBase::GetSingleArgument<string>("backward_step_net", "");
 
-    if (stepNetDef_.type() == "rnn") {
-      stepNetDef_.set_type("simple");
-    }
-
-    CAFFE_ENFORCE(
-        google::protobuf::TextFormat::ParseFromString(stepNet, &stepNetDef_));
+    stepNetDef_ = detail::extractNetDef(operator_def, "backward_step_net");
 
     links_ = constructLinks();
     params_ = constructParams(operator_def);
@@ -618,7 +645,8 @@ class RecurrentNetworkGradientOp final : public Operator<Context> {
     }
   }
 
-  bool RunOnDevice() {
+  template<typename T>
+  bool DoRunWithType() {
     const auto seqLen = Input(gradInputs_.size()).dim32(0);
     VLOG(1) << "seqLen: " << seqLen;
 
@@ -640,7 +668,10 @@ class RecurrentNetworkGradientOp final : public Operator<Context> {
       auto* g = gBlob->template GetMutable<Tensor<Context>>();
       g->ResizeLike(p);
       math::Set<T, Context>(
-          g->size(), 0.0, g->template mutable_data<T>(), &context_);
+          g->size(),
+          convert::To<float,T>(0.0),
+          g->template mutable_data<T>(),
+          &context_);
     }
 
     for (auto& rg : recurrentGradients_) {
@@ -657,7 +688,7 @@ class RecurrentNetworkGradientOp final : public Operator<Context> {
       // Fill the last timestep with zeros for the gradient
       math::Set<T, Context>(
           timestep,
-          0.0,
+          convert::To<float,T>(0.0),
           g->template mutable_data<T>() + (g->dim(0) - 1) * timestep,
           &context_);
     }
@@ -766,7 +797,11 @@ class RecurrentNetworkGradientOp final : public Operator<Context> {
         // which sums up several tensors together instead of going 1 by 1
         const auto recurrentStateSize = Input(inputId).dim32(0);
 
-        math::Set<T, Context>(recurrentStateSize, 0.0, output_data, &context_);
+        math::Set<T, Context>(
+            recurrentStateSize,
+            convert::To<float,T>(0.0),
+            output_data,
+            &context_);
 
         math::AddStripedBatch<T, Context>(
             recurrentStateSize,
@@ -779,6 +814,10 @@ class RecurrentNetworkGradientOp final : public Operator<Context> {
     }
 
     return true;
+  }
+
+  bool RunOnDevice() {
+    return DoRunWithType<float>();
   }
 
  protected:
@@ -796,7 +835,7 @@ class RecurrentNetworkGradientOp final : public Operator<Context> {
   std::vector<int32_t> gradInputs_;
 };
 
-template <typename T, class Context>
+template <class Context>
 class AccumulateInputGradientOp : public Operator<Context> {
  public:
   AccumulateInputGradientOp(const OperatorDef& def, Workspace* ws)
@@ -806,7 +845,8 @@ class AccumulateInputGradientOp : public Operator<Context> {
   }
   USE_OPERATOR_CONTEXT_FUNCTIONS;
 
-  bool RunOnDevice() override {
+  template<typename T>
+  bool DoRunWithType() {
     const auto t =
         OperatorBase::Input<Tensor<CPUContext>>(0).template data<int32_t>()[0];
     auto& og = Input(1);
@@ -831,11 +871,15 @@ class AccumulateInputGradientOp : public Operator<Context> {
     return true;
   }
 
+  bool RunOnDevice() override {
+    return DispatchHelper<TensorTypes<float>>::call(this, Input(1));
+  }
+
  private:
   int offset_;
 };
 
-template <typename T, class Context>
+template <class Context>
 class RNNApplyLinkOp : public Operator<Context> {
  public:
   RNNApplyLinkOp(const OperatorDef& def, Workspace* ws)
@@ -848,7 +892,8 @@ class RNNApplyLinkOp : public Operator<Context> {
 
   USE_OPERATOR_CONTEXT_FUNCTIONS;
 
-  bool RunOnDevice() override {
+  template <typename T>
+  bool DoRunWithType() {
     // Both internal and external appear as both input and output to enforce
     // correct dependency computation.
     const auto t =
@@ -869,6 +914,10 @@ class RNNApplyLinkOp : public Operator<Context> {
     internal_out->ShareExternalPointer(
         externalData, externalTimestepSize * window_);
     return true;
+  }
+
+  bool RunOnDevice() override {
+    return DoRunWithType<float>();
   }
 
  private:

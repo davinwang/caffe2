@@ -1,3 +1,19 @@
+/**
+ * Copyright (c) 2016-present, Facebook, Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #include "caffe2/core/net_simple.h"
 #include "caffe2/core/net.h"
 
@@ -6,6 +22,7 @@
 #include <unordered_set>
 
 #include "caffe2/core/operator.h"
+#include "caffe2/core/static_tracepoint.h"
 #include "caffe2/core/timer.h"
 #include "caffe2/proto/caffe2.pb.h"
 #include "caffe2/utils/proto_utils.h"
@@ -21,7 +38,7 @@ SimpleNet::SimpleNet(
   // Initialize the operators
   for (int idx = 0; idx < net_def->op_size(); ++idx) {
     const auto& operator_def = net_def->op(idx);
-    VLOG(1) << "Creating operator " << operator_def.name() << ":"
+    VLOG(1) << "Creating operator " << operator_def.name() << ": "
             << operator_def.type();
     std::unique_ptr<OperatorBase> op{nullptr};
     if (!operator_def.has_device_option() && net_def_has_device_option) {
@@ -41,21 +58,25 @@ SimpleNet::SimpleNet(
 }
 
 bool SimpleNet::RunAsync() {
-  if (observer_) {
-    observer_->Start();
-  }
+  StartAllObservers();
+
+  const auto& net_name = name_.c_str();
   VLOG(1) << "Running net " << name_;
   for (auto& op : operators_) {
-    VLOG(1) << "Running operator " << op->debug_def().name() << "("
-            << op->debug_def().type() << ").";
-    if (!op->Run()) {
-      LOG(ERROR) << "Operator failed: " << ProtoDebugString(op->debug_def());
+    const auto& opdef = op->debug_def();
+    const auto& op_ptr = op.get();
+    const auto& op_name = opdef.name().c_str();
+    const auto& op_type = opdef.type().c_str();
+    VLOG(1) << "Running operator " << op_name << "(" << op_type << ").";
+    CAFFE_SDT(operator_start, net_name, op_name, op_type, op_ptr);
+    bool res = op->Run();
+    CAFFE_SDT(operator_done, net_name, op_name, op_type, op_ptr);
+    if (!res) {
+      LOG(ERROR) << "Operator failed: " << ProtoDebugString(opdef);
       return false;
     }
   }
-  if (observer_) {
-    observer_->Stop();
-  }
+  StopAllObservers();
   return true;
 }
 

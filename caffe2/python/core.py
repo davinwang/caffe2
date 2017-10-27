@@ -1,3 +1,18 @@
+# Copyright (c) 2016-present, Facebook, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+##############################################################################
+
 ## @package core
 # Module caffe2.python.core
 from __future__ import absolute_import
@@ -13,8 +28,9 @@ from six import binary_type, string_types, text_type
 
 from caffe2.proto import caffe2_pb2
 from caffe2.python import scope, utils, workspace
+from caffe2.python.control_ops_grad import gen_do_gradient, gen_if_gradient
+
 import caffe2.python._import_c_extension as C
-import google.protobuf.text_format as protobuftx
 import pickle
 import numpy as np
 import sys
@@ -69,17 +85,19 @@ def GetGlobalInitArgs():
 
 
 def IsOperator(op_type):
-    return (op_type in _REGISTERED_OPERATORS)
+    return IsOperatorWithEngine(op_type, engine='DEFAULT')
 
 
 def IsOperatorWithEngine(op_type, engine):
-    return (op_type + "_ENGINE_" + engine in _REGISTERED_OPERATORS)
+    return C.op_registry_key(op_type, engine) in _REGISTERED_OPERATORS
 
 
-def DeviceOption(device_type, cuda_gpu_id=0, random_seed=None):
+def DeviceOption(device_type, cuda_gpu_id=0, random_seed=None, node_name=None):
     option = caffe2_pb2.DeviceOption()
     option.device_type = device_type
     option.cuda_gpu_id = cuda_gpu_id
+    if node_name is not None:
+        option.node_name = node_name
     if random_seed is not None:
         option.random_seed = random_seed
     return option
@@ -433,7 +451,7 @@ class IR(object):
         for op in operators:
             if op.type == 'StopGradient':
                 if op.output[0] not in self.input_usages:
-                    raise Exception("""StopGradient's output '{}' is orphan.
+                    raise ValueError("""StopGradient's output '{}' is orphan.
 You typically want to specify same input and output for
 StopGradient. Op:\n\n{}""".format(op.output[0], str(op)))
 
@@ -799,10 +817,17 @@ StopGradient. Op:\n\n{}""".format(op.output[0], str(op)))
                     all_device_options.append(g.grad_op_values.device_option)
                     all_gradient_names.append(g.gradient.values)
 
+        def device_option_equal(opt1, opt2):
+            if not opt1 or not opt2:
+                return opt1 == opt2
+            return opt1.device_type == opt2.device_type and\
+                opt1.cuda_gpu_id == opt2.cuda_gpu_id
+
         # Check if all grad op device options are the same.
         if len(all_device_options) >= 2 and not all(
-                d == all_device_options[0] for d in all_device_options[1:]):
-            raise RuntimeError('Unexpected behavior: not all grad ops'
+                device_option_equal(d, all_device_options[0])
+                for d in all_device_options[1:]):
+            raise RuntimeError('Unexpected behavior: not all grad ops '
                                'have the same device option.')
         return True
 
@@ -1076,6 +1101,10 @@ class GradientRegistry(object):
         return ir.GetBackwardPass(ys)
 
 
+GradientRegistry.RegisterGradient('Do')(gen_do_gradient)
+GradientRegistry.RegisterGradient('If')(gen_if_gradient)
+
+
 def get_ssa(net, blob_versions=None):
     """
     Given a net, return a structure containing the version of each input and
@@ -1193,23 +1222,40 @@ def recurrent_network_op_remap(op, prefix, blob_remap):
             remap_proto(argument, blob_remap)
 
 
+def control_op_remap(op, prefix, blob_remap):
+    net_arg_names = []
+    if op.type == "If":
+        net_arg_names = ['then_net', 'else_net']
+    else:
+        net_arg_names = ['loop_net', 'cond_net']
+    for argument in op.arg:
+        if argument.name in net_arg_names:
+            assert argument.n, \
+                "Expected non empty net in " + op.type + "'s " + argument.name + " argument"
+            subnet = Net(argument.n)
+            remapped_subnet = subnet.Clone(
+                name=(subnet._net.name if subnet._net.name else '') + '_remapped',
+                blob_remap=blob_remap)
+            argument.n.CopyFrom(remapped_subnet.Proto())
+
+
 DEFAULT_REMAP_FUNCS = {
     'RecurrentNetwork': recurrent_network_op_remap,
     'RecurrentNetworkGradient': recurrent_network_op_remap,
+    'If': control_op_remap,
+    'While': control_op_remap,
 }
 
 
 def remap_proto(argument, blob_remap):
-    proto = caffe2_pb2.NetDef()
-    protobuftx.Merge(argument.s.decode('utf-8'), proto)
-    subnet = Net(proto)
+    subnet = Net(argument.n)
 
     cloned_sub_net = subnet.Clone(
         'cloned_sub_net',
         blob_remap,
     )
 
-    argument.s = str(cloned_sub_net.Proto()).encode('utf-8')
+    argument.n.CopyFrom(cloned_sub_net.Proto())
 
 
 def clone_and_bind_net(net, name, prefix, blob_remap=None, inputs=None,
@@ -1829,6 +1875,16 @@ class Net(object):
             * [ScopedBlobReference(b) for b in outputs]
         )
 
+    # This returns a reference to the observer
+    def AddObserver(self, observer_type):
+        return C.add_observer_to_net(self._net.name, observer_type)
+
+    def RemoveObserver(self, observer):
+        C.remove_observer_from_net(self._net.name, observer)
+
+    def NumObservers(self):
+        return C.num_observers_on_net(self._net.name)
+
     @property
     def external_inputs(self):
         return [_get_blob_ref(x) for x in self._net.external_input]
@@ -1928,7 +1984,7 @@ class Net(object):
             for op in self._net.op:
                 op.engine = "CUDNN"
     def RunAllOnMKL(self):
-        """A convenient function to run everything on the GPU."""
+        """A convenient function to run everything using MKLDNN."""
         device_option = caffe2_pb2.DeviceOption()
         device_option.device_type = caffe2_pb2.MKLDNN
         self._net.device_option.CopyFrom(device_option)
@@ -2128,7 +2184,7 @@ class RemapEntry:
         return hash(self.blob + str(self.device))
 
 
-def InjectCrossDeviceCopies(net, blob_to_device=None):
+def InjectCrossDeviceCopies(net, blob_to_device=None, blob_remap=None):
     '''
     Injecting Copy functions between device within a net. Users can provide
     a net with part of operators using different device_options. This method
@@ -2136,6 +2192,9 @@ def InjectCrossDeviceCopies(net, blob_to_device=None):
 
     Inputs:
       blob_to_device: If not None, it is a map of blobs and their device locations.
+      blob_remap: If not None, it is a map from a pair (blob, device) to
+                  the name of the blob in the given device. Blobs found in this
+                  map are assumed to be cached and don't need to be copied.
     Outputs:
       new_net: A new net with CopyCPUToGPU inserted with correct device option
 
@@ -2148,11 +2207,23 @@ def InjectCrossDeviceCopies(net, blob_to_device=None):
     '''
     new_net = net.Clone(net._net.name + '_cross_device', keep_schema=True)
     del new_net._net.op[:]
-    blob_to_device = blob_to_device or {}
+    if blob_to_device is None:
+        blob_to_device = {}
     # remapping of input blobs for each op.
-    blob_remap = {}
+    if blob_remap is None:
+        blob_remap = {}
     temp_remap = {}
     net_option = net._net.device_option or caffe2_pb2.DeviceOption()
+
+    # if external_inputs have device remappings generated by previous nets,
+    # then add those remappings as external inputs as well.
+    all_remaps = defaultdict(list)
+    for entry, mapped_blob in blob_remap.items():
+        all_remaps[entry.blob].append(mapped_blob)
+    mapped_external_inputs = []
+    for input in new_net._net.external_input:
+        mapped_external_inputs.extend(all_remaps.get(input) or [])
+    new_net._net.external_input.extend(mapped_external_inputs)
 
     for op in net._net.op:
         temp_remap.clear()
@@ -2260,11 +2331,14 @@ def InjectDeviceCopiesAmongNets(nets, blob_to_device_init=None):
         "nets {} should be a list of nets.".format(str(nets))
     # A holistic blob to device mapping.
     blob_to_device = blob_to_device_init or {}
+    blob_remap = {}
     new_nets = []
 
     for net in nets:
         new_net, blob_to_device = InjectCrossDeviceCopies(
-            net, blob_to_device=blob_to_device
+            net,
+            blob_to_device=blob_to_device,
+            blob_remap=blob_remap,
         )
         new_nets.append(new_net)
 

@@ -1,3 +1,19 @@
+/**
+ * Copyright (c) 2016-present, Facebook, Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #include <algorithm>
 #include <atomic>
 #include <cstdlib>
@@ -32,6 +48,11 @@ CAFFE2_DEFINE_int(caffe2_cub_max_bin, 10,
 CAFFE2_DEFINE_int(caffe2_cub_max_managed_mb, 10 * 1024,
              "If using cub as the memory allocators, sets the maximum amount "
              "of memory managed in gigabytes");
+CAFFE2_DEFINE_bool(
+    caffe2_cub_print_allocation_events,
+    false,
+    "If true CachingDeviceAllocator will print allocation and deallocation "
+    "events to stdout.");
 
 CAFFE2_DEFINE_bool(
     caffe2_gpu_memory_tracking,
@@ -169,8 +190,7 @@ static void SetUpCub() {
         FLAGS_caffe2_cub_max_bin,
         size_t(FLAGS_caffe2_cub_max_managed_mb) * 1024L * 1024L,
         false,
-        false // debug
-    ));
+        FLAGS_caffe2_cub_print_allocation_events));
   } catch (...) {
     CAFFE_THROW("Some error happened at cub initialization.");
   }

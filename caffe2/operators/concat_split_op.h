@@ -1,3 +1,19 @@
+/**
+ * Copyright (c) 2016-present, Facebook, Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #ifndef CAFFE2_OPERATORS_CONCAT_SPLIT_OP_H_
 #define CAFFE2_OPERATORS_CONCAT_SPLIT_OP_H_
 
@@ -128,7 +144,6 @@ bool SplitOp<Context>::RunOnDevice() {
       input_channels,
       "Sum of split dimensions do not match: should be ",
       input_channels);
-  int input_offset = 0;
   vector<TIndex> output_dims(input.dims());
   int before = 1, after = 1;
   for (int i = 0; i < axis_; ++i) {
@@ -140,6 +155,7 @@ bool SplitOp<Context>::RunOnDevice() {
   if (add_axis_) {
     output_dims.erase(output_dims.begin() + axis_);
   }
+  size_t input_offset = 0;
   for (int i = 0; i < OutputSize(); ++i) {
     auto* output = Output(i);
     auto axis_dim = add_axis_ ? 1 : axis_data[i];
@@ -155,7 +171,8 @@ bool SplitOp<Context>::RunOnDevice() {
         input.dim32(axis_) * after,
         output->raw_mutable_data(input.meta()),
         axis_dim * after,
-        &context_);
+        &context_,
+        input.meta().copy());
     input_offset += axis_dim * after * input.itemsize();
   }
   return true;
@@ -230,7 +247,7 @@ bool ConcatOp<Context>::RunOnDevice() {
     output_dims[axis_] = output_channels;
   }
   output->Resize(output_dims);
-  int output_offset = 0;
+  size_t output_offset = 0;
   for (int i = 0; i < InputSize(); ++i) {
     auto& input = Input(i);
     auto axis_dim = add_axis_ ? 1 : input.dim32(axis_);
@@ -243,7 +260,8 @@ bool ConcatOp<Context>::RunOnDevice() {
         static_cast<char*>(output->raw_mutable_data(input_zero.meta())) +
             output_offset,
         output_channels * after,
-        &context_);
+        &context_,
+        input_zero.meta().copy());
     output_offset += axis_dim * after * input.itemsize();
   }
   return true;

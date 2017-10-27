@@ -1,3 +1,19 @@
+/**
+ * Copyright (c) 2016-present, Facebook, Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #ifndef CAFFE2_CORE_CONTEXT_H_
 #define CAFFE2_CORE_CONTEXT_H_
 
@@ -97,11 +113,7 @@ class CPUContext final {
     auto data_and_deleter = GetCPUAllocator()->New(nbytes);
     if (FLAGS_caffe2_report_cpu_memory_usage) {
       reporter_.New(data_and_deleter.first, nbytes);
-      auto original_deleter = data_and_deleter.second;
-      data_and_deleter.second = [original_deleter](void* data) {
-        reporter_.Delete(data);
-        original_deleter(data);
-      };
+      data_and_deleter.second = ReportAndDelete;
     }
     return data_and_deleter;
   }
@@ -138,6 +150,12 @@ class CPUContext final {
   int random_seed_{1701};
   std::unique_ptr<rand_gen_type> random_generator_;
   static MemoryAllocationReporter reporter_;
+
+ private:
+  static void ReportAndDelete(void* ptr) {
+    reporter_.Delete(ptr);
+    GetCPUAllocator()->GetDeleter()(ptr);
+  }
 };
 
 template<>

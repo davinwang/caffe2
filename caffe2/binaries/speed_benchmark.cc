@@ -1,3 +1,19 @@
+/**
+ * Copyright (c) 2016-present, Facebook, Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #include <string>
 
 #include "caffe2/core/init.h"
@@ -75,7 +91,7 @@ int main(int argc, char** argv) {
         }
         caffe2::TensorCPU* tensor =
             workspace->GetBlob(input_names[i])->GetMutable<caffe2::TensorCPU>();
-        tensor->Reshape(input_dims);
+        tensor->Resize(input_dims);
         tensor->mutable_data<float>();
       }
     } else {
@@ -93,8 +109,7 @@ int main(int argc, char** argv) {
       caffe2::FLAGS_iter,
       caffe2::FLAGS_run_individual);
 
-  string output_prefix = 
-      caffe2::FLAGS_output_folder.size()
+  string output_prefix = caffe2::FLAGS_output_folder.size()
       ? caffe2::FLAGS_output_folder + "/"
       : "";
   if (caffe2::FLAGS_output.size()) {

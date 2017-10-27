@@ -1,14 +1,30 @@
+/**
+ * Copyright (c) 2016-present, Facebook, Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #include "caffe2/utils/proto_utils.h"
 
 #include <fcntl.h>
 #include <cerrno>
 #include <fstream>
 
-#include "google/protobuf/io/coded_stream.h"
-#include "google/protobuf/io/zero_copy_stream_impl.h"
+#include <google/protobuf/io/coded_stream.h>
+#include <google/protobuf/io/zero_copy_stream_impl.h>
 
 #ifndef CAFFE2_USE_LITE_PROTO
-#include "google/protobuf/text_format.h"
+#include <google/protobuf/text_format.h>
 #endif  // !CAFFE2_USE_LITE_PROTO
 
 #include "caffe2/core/logging.h"
@@ -24,6 +40,8 @@ std::string DeviceTypeName(const int32_t& d) {
       return "CPU";
     case CUDA:
       return "CUDA";
+    case OPENGL:
+      return "OPENGL";
     case MKLDNN:
       return "MKLDNN";
     default:
@@ -42,7 +60,8 @@ std::string DeviceTypeName(const int32_t& d) {
 bool IsSameDevice(const DeviceOption& lhs, const DeviceOption& rhs) {
   return (
       lhs.device_type() == rhs.device_type() &&
-      lhs.cuda_gpu_id() == rhs.cuda_gpu_id());
+      lhs.cuda_gpu_id() == rhs.cuda_gpu_id() &&
+      lhs.node_name() == rhs.node_name());
 }
 
 bool ReadStringFromFile(const char* filename, string* str) {

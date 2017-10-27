@@ -1,3 +1,18 @@
+# Copyright (c) 2016-present, Facebook, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+##############################################################################
+
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
@@ -76,8 +91,13 @@ class DataParallelModelTest(TestCase):
             optimizer_builder_fun=add_optimizer,
             devices=devices,
             cpu_device=not gpu,
+            shared_model=not gpu,
         )
         data_parallel_model.AddBlobSync(model, ["sync_num"])
+
+        # Light test for LR names
+        lr_names = data_parallel_model.GetLearningRateBlobNames(model)
+        self.assertGreater(len(lr_names), 0)
 
         np.random.seed(2603)
 
@@ -194,7 +214,7 @@ class DataParallelModelTest(TestCase):
             model.Conv("data_nchw", 'conv1', 3, 64,
                        weight_init=("MSRAFill", {}), kernel=7,
                        stride=2, pad=3, no_bias=0)
-            model.SpatialBN('conv1', 'conv1_spatbn_relu', 64, epsilon=1e-3)
+            model.SpatialBN('conv1', 'conv1_spatbn_relu', 64, epsilon=1e-3, is_test=False)
             model.Relu('conv1_spatbn_relu', 'conv1_spatbn_relu')
             model.MaxPool('conv1_spatbn_relu', 'pool1', kernel=3, stride=2)
             model.FC('pool1', 'fc', dim_in=(64 * 56 * 56), dim_out=100)
@@ -255,7 +275,7 @@ class DataParallelModelTest(TestCase):
             model.Conv("data_nchw", 'conv1', 3, 64,
                        weight_init=("MSRAFill", {}), kernel=7,
                        stride=2, pad=3, no_bias=0)
-            model.SpatialBN('conv1', 'conv1_spatbn_relu', 64, epsilon=1e-3)
+            model.SpatialBN('conv1', 'conv1_spatbn_relu', 64, epsilon=1e-3, is_test=False)
             model.Relu('conv1_spatbn_relu', 'conv1_spatbn_relu')
             model.MaxPool('conv1_spatbn_relu', 'pool1', kernel=3, stride=2)
             model.FC('pool1', 'fc', dim_in=(64 * 56 * 56), dim_out=10)
@@ -343,14 +363,12 @@ class DataParallelModelTest(TestCase):
                 device_option=None,
                 tmpdir=tmpdir)
 
-    @unittest.expectedFailure
     def test_device_scope_check(self):
-        with core.DeviceScope(core.DeviceOption(caffe2_pb2.CUDA, 0)):
-            data_parallel_model.Parallelize_GPU(None, None, None)
+        with self.assertRaises(AssertionError):
+            with core.DeviceScope(core.DeviceOption(caffe2_pb2.CUDA, 0)):
+                data_parallel_model.Parallelize_GPU(None, None, None)
 
 
-@unittest.skipIf(not workspace.has_gpu_support, "No gpu support.")
-@unittest.skipIf(workspace.NumCudaDevices() < 2, "Need at least 2 GPUs.")
 class RecurrentNetworkParallelTest(TestCase):
 
     def run_model(self, devices, gpu):

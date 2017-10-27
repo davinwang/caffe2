@@ -134,12 +134,13 @@ if [ "$TRAVIS_OS_NAME" = 'linux' ]; then
         rm -f "$_mkl_key"
         echo 'deb http://apt.repos.intel.com/mkl all main' | sudo tee /etc/apt/sources.list.d/intel-mkl.list
         sudo apt-get update
-        $APT_INSTALL_CMD intel-mkl-64bit-2017.3-056
+        $APT_INSTALL_CMD intel-mkl-64bit
     fi
 elif [ "$TRAVIS_OS_NAME" = 'osx' ]; then
     #####################
     # brew dependencies #
     #####################
+    brew update
     pip uninstall -y numpy  # use brew version (opencv dependency)
     brew tap homebrew/science  # for OpenCV
     brew install \

@@ -1,9 +1,25 @@
+/**
+ * Copyright (c) 2016-present, Facebook, Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #include "caffe2/operators/batch_matmul_op.h"
 #include "caffe2/core/operator_schema.h"
 
 namespace caffe2 {
 
-REGISTER_CPU_OPERATOR(BatchMatMul, BatchMatMulOp<float, CPUContext>);
+REGISTER_CPU_OPERATOR(BatchMatMul, BatchMatMulOp<CPUContext>);
 
 OPERATOR_SCHEMA(BatchMatMul)
     .NumInputs(2)
@@ -34,7 +50,7 @@ size (C x K x N) where C is the batch size and i ranges from 0 to C-1.
         b_dim1 = in[1].dims(2);
       }
       return vector<TensorShape> {
-          CreateTensorShape(vector<int> {
+          CreateTensorShape(vector<TIndex> {
               in[0].dims(0), a_dim0, b_dim1},
               in[0].data_type())
       };
@@ -55,14 +71,21 @@ class GetBatchMatMulGradient : public GradientMakerBase {
       trans_b = GetArgument(Def(), "trans_b").i();
     }
 
-    const auto no_trans_arg = vector<Argument>();
-    const auto trans_a_arg = vector<Argument>{
+    auto no_trans_arg = vector<Argument>();
+    auto trans_a_arg = vector<Argument>{
         MakeArgument<int>("trans_a", 1)};
-    const auto trans_b_arg = vector<Argument>{
+    auto trans_b_arg = vector<Argument>{
         MakeArgument<int>("trans_b", 1)};
-    const auto trans_both_arg = vector<Argument>{
+    auto trans_both_arg = vector<Argument>{
         MakeArgument<int>("trans_a", 1),
         MakeArgument<int>("trans_b", 1)};
+
+    if (ArgumentHelper::HasArgument(Def(), "use_scratch")) {
+      no_trans_arg.push_back(MakeArgument<int>("use_scratch", 1));
+      trans_a_arg.push_back(MakeArgument<int>("use_scratch", 1));
+      trans_b_arg.push_back(MakeArgument<int>("use_scratch", 1));
+      trans_both_arg.push_back(MakeArgument<int>("use_scratch", 1));
+    }
 
     if (trans_a) {
       if (trans_b) {

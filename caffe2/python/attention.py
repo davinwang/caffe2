@@ -1,3 +1,18 @@
+# Copyright (c) 2016-present, Facebook, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+##############################################################################
+
 ## @package attention
 # Module caffe2.python.attention
 from __future__ import absolute_import
@@ -27,7 +42,8 @@ def _calc_weighted_context(
     scope,
 ):
     # [batch_size, encoder_output_dim, 1]
-    attention_weighted_encoder_context = model.net.BatchMatMul(
+    attention_weighted_encoder_context = brew.batch_mat_mul(
+        model,
         [encoder_outputs_transposed, attention_weights_3d],
         s(scope, 'attention_weighted_encoder_context'),
     )

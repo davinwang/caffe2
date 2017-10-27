@@ -1,3 +1,19 @@
+/**
+ * Copyright (c) 2016-present, Facebook, Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #ifndef CAFFE2_CORE_ALLOCATOR_H_
 #define CAFFE2_CORE_ALLOCATOR_H_
 
@@ -13,13 +29,17 @@ namespace caffe2 {
 // Use 32-byte alignment should be enough for computation up to AVX512.
 constexpr size_t gCaffe2Alignment = 32;
 
-using MemoryDeleter = std::function<void(void* ptr)>;
+using MemoryDeleter = void (*)(void*);
+
+// A helper function that is basically doing nothing.
+void NoDelete(void*);
 
 // A virtual allocator class to do memory allocation and deallocation.
 struct CPUAllocator {
   CPUAllocator() {}
   virtual ~CPUAllocator() noexcept {}
   virtual std::pair<void*, MemoryDeleter> New(size_t nbytes) = 0;
+  virtual MemoryDeleter GetDeleter() = 0;
 };
 
 // A virtual struct that is used to report Caffe2's memory allocation and
@@ -54,6 +74,7 @@ struct DefaultCPUAllocator final : CPUAllocator {
     }
     return {data, Delete};
   }
+
 #ifdef _MSC_VER
   static void Delete(void* data) {
     _aligned_free(data);
@@ -63,6 +84,10 @@ struct DefaultCPUAllocator final : CPUAllocator {
     free(data);
   }
 #endif
+
+  MemoryDeleter GetDeleter() override {
+    return Delete;
+  }
 };
 
 // Get the CPU Alloctor.

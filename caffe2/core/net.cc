@@ -1,3 +1,19 @@
+/**
+ * Copyright (c) 2016-present, Facebook, Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #include "caffe2/core/net.h"
 #include "caffe2/core/net_simple.h"
 
@@ -28,6 +44,15 @@ NetBase::NetBase(
           def->external_output().begin(),
           def->external_output().end()),
       name_(def->name()) {
+  // Check that node_name is empty for all ops
+  for (const OperatorDef& op : def->op()) {
+    if (op.has_device_option()) {
+      CAFFE_ENFORCE(
+          !op.device_option().has_node_name(),
+          "node_name must be empty for all operators at execution time.");
+    }
+  }
+
   // Go through the operators and make sure that blobs are correctly made.
   std::set<string> known_blobs(
       external_input_.begin(), external_input_.end());
@@ -99,7 +124,7 @@ unique_ptr<NetBase> CreateNet(
   }
   VLOG(1) << "Adding a global observer to a net";
   if (net) {
-    net->SetObserver(GlobalNetObserverCreator(net.get()));
+    net->AttachObserver(GlobalNetObserverCreator(net.get()));
   }
   return net;
 }

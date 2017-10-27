@@ -1,5 +1,6 @@
 # This list is required for static linking and exported to Caffe2Config.cmake
 set(Caffe2_DEPENDENCY_LIBS "")
+set(Caffe2_CUDA_DEPENDENCY_LIBS "")
 set(Caffe2_PYTHON_DEPENDENCY_LIBS "")
 set(Caffe2_EXTERNAL_DEPENDENCIES "")
 
@@ -16,6 +17,25 @@ endif()
 if(USE_LITE_PROTO)
   set(CAFFE2_USE_LITE_PROTO 1)
 endif()
+
+# ---[ git: used to generate git build string.
+find_package(Git)
+if(GIT_FOUND)
+  execute_process(COMMAND ${GIT_EXECUTABLE} describe --tags --always --dirty
+                  ERROR_QUIET OUTPUT_STRIP_TRAILING_WHITESPACE
+                  WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+                  OUTPUT_VARIABLE CAFFE2_GIT_VERSION
+                  RESULT_VARIABLE __git_result)
+  if(NOT ${__git_result} EQUAL 0)
+    set(CAFFE2_GIT_VERSION "unknown")
+  endif()
+else()
+  message(
+      WARNING
+      "Cannot find git, so Caffe2 won't have any git build info available")
+endif()
+
+
 
 # ---[ BLAS
 set(BLAS "Eigen" CACHE STRING "Selected BLAS library")
@@ -60,45 +80,61 @@ if(USE_NNPACK)
   endif()
 endif()
 
-# ---[ Google-glog
-if(USE_GLOG)
-  include("cmake/External/glog.cmake")
-  if(GLOG_FOUND)
-    set(CAFFE2_USE_GOOGLE_GLOG 1)
-    caffe2_include_directories(${GLOG_INCLUDE_DIRS})
-    list(APPEND Caffe2_DEPENDENCY_LIBS ${GLOG_LIBRARIES})
-  else()
-    message(WARNING "Not compiling with glog. Suppress this warning with -DUSE_GLOG=OFF")
-    set(USE_GLOG OFF)
-  endif()
-endif()
-
-# ---[ Google-gflags
+# ---[ gflags
 if(USE_GFLAGS)
-  include("cmake/External/gflags.cmake")
+  find_package(GFlags)
   if(GFLAGS_FOUND)
     set(CAFFE2_USE_GFLAGS 1)
     caffe2_include_directories(${GFLAGS_INCLUDE_DIRS})
     list(APPEND Caffe2_DEPENDENCY_LIBS ${GFLAGS_LIBRARIES})
   else()
-    message(WARNING "Not compiling with gflags. Suppress this warning with -DUSE_GFLAGS=OFF")
+    message(WARNING
+        "gflags is not found. Caffe2 will build without gflags support but it "
+        "is strongly recommended that you install gflags. Suppress this "
+        "warning with -DUSE_GFLAGS=OFF")
     set(USE_GFLAGS OFF)
+  endif()
+endif()
+
+# ---[ Google-glog
+if(USE_GLOG)
+  find_package(Glog)
+  if(GLOG_FOUND)
+    set(CAFFE2_USE_GOOGLE_GLOG 1)
+    caffe2_include_directories(${GLOG_INCLUDE_DIRS})
+    list(APPEND Caffe2_DEPENDENCY_LIBS ${GLOG_LIBRARIES})
+  else()
+    message(WARNING
+        "glog is not found. Caffe2 will build without glog support but it is "
+        "strongly recommended that you install glog. Suppress this warning "
+        "with -DUSE_GLOG=OFF")
+    set(USE_GLOG OFF)
   endif()
 endif()
 
 # ---[ Googletest and benchmark
 if(BUILD_TEST)
+  set(TEMP_BUILD_SHARED_LIBS ${BUILD_SHARED_LIBS})
+  # We will build gtest as static libs and embed it directly into the binary.
+  set(BUILD_SHARED_LIBS OFF)
+  # For gtest, we will simply embed it into our test binaries, so we won't
+  # need to install it.
+  set(BUILD_GTEST ON)
+  set(INSTALL_GTEST OFF)
+  # We currently don't need gmock right now.
+  set(BUILD_GMOCK OFF)
   add_subdirectory(${PROJECT_SOURCE_DIR}/third_party/googletest)
   caffe2_include_directories(${PROJECT_SOURCE_DIR}/third_party/googletest/googletest/include)
 
-  find_package(Benchmark)
-  if(Benchmark_FOUND)
-    list(APPEND Caffe2_DEPENDENCY_LIBS ${Benchmark_LIBRARIES})
-    caffe2_include_directories(${Benchmark_INCLUDE_DIRS})
-  else()
-    add_subdirectory(${PROJECT_SOURCE_DIR}/third_party/benchmark)
-    caffe2_include_directories(${PROJECT_SOURCE_DIR}/third_party/benchmark/include)
-  endif()
+  # We will not need to test benchmark lib itself.
+  set(BENCHMARK_ENABLE_TESTING OFF CACHE BOOL "Disable benchmark testing as we don't need it.")
+  # We will not need to install benchmark since we link it statically. 
+  set(BENCHMARK_ENABLE_INSTALL OFF CACHE BOOL "Disable benchmark install to avoid overwriting vendor install.")
+  add_subdirectory(${PROJECT_SOURCE_DIR}/third_party/benchmark)
+  caffe2_include_directories(${PROJECT_SOURCE_DIR}/third_party/benchmark/include)
+
+  # Recover the build shared libs option.
+  set(BUILD_SHARED_LIBS ${TEMP_BUILD_SHARED_LIBS})
 endif()
 
 # ---[ LMDB
@@ -198,11 +234,14 @@ if(USE_FFMPEG)
 endif()
 
 # ---[ EIGEN
+# Due to license considerations, we will only use the MPL2 parts of Eigen.
 set(EIGEN_MPL2_ONLY 1)
-find_package(Eigen3 QUIET)
+find_package(Eigen3)
 if(EIGEN3_FOUND)
+  message(STATUS "Found system Eigen at " ${EIGEN3_INCLUDE_DIRS})
   caffe2_include_directories(${EIGEN3_INCLUDE_DIRS})
 else()
+  message(STATUS "Did not find system Eigen. Using third party subdirectory.")
   caffe2_include_directories(${PROJECT_SOURCE_DIR}/third_party/eigen)
 endif()
 
@@ -212,6 +251,8 @@ if(BUILD_PYTHON)
   find_package(PythonInterp 2.7)
   find_package(PythonLibs 2.7)
   find_package(NumPy REQUIRED)
+  # Observers are required in the python build
+  set(USE_OBSERVERS ON)
   if(PYTHONINTERP_FOUND AND PYTHONLIBS_FOUND AND NUMPY_FOUND)
     caffe2_include_directories(${PYTHON_INCLUDE_DIRS} ${NUMPY_INCLUDE_DIR})
     list(APPEND Caffe2_PYTHON_DEPENDENCY_LIBS ${PYTHON_LIBRARIES})
@@ -299,7 +340,7 @@ if(USE_CUDA)
     find_package(CuDNN REQUIRED)
     if(CUDNN_FOUND)
       caffe2_include_directories(${CUDNN_INCLUDE_DIRS})
-      list(APPEND Caffe2_DEPENDENCY_LIBS ${CUDNN_LIBRARIES})
+      list(APPEND Caffe2_CUDA_DEPENDENCY_LIBS ${CUDNN_LIBRARIES})
     endif()
   else()
     message(WARNING "Not compiling with CUDA. Suppress this warning with -DUSE_CUDA=OFF")
@@ -319,7 +360,7 @@ if(USE_NCCL)
     include("cmake/External/nccl.cmake")
     caffe2_include_directories(${NCCL_INCLUDE_DIRS})
     message(STATUS "NCCL: ${NCCL_LIBRARIES}")
-    list(APPEND Caffe2_DEPENDENCY_LIBS ${NCCL_LIBRARIES})
+    list(APPEND Caffe2_CUDA_DEPENDENCY_LIBS ${NCCL_LIBRARIES})
   endif()
 endif()
 
@@ -356,8 +397,11 @@ if(USE_GLOO)
       set(BUILD_TEST OFF)
       set(BUILD_BENCHMARK OFF)
       add_subdirectory(${PROJECT_SOURCE_DIR}/third_party/gloo)
-      caffe2_include_directories(${PROJECT_SOURCE_DIR}/third_party/gloo)
-      caffe2_include_directories(${PROJECT_BINARY_DIR}/third_party/gloo)
+      # Here is a little bit hacky. We have to put PROJECT_BINARY_DIR in front
+      # of PROJECT_SOURCE_DIR with/without conda system. The reason is that
+      # gloo generates a new config.h in the binary diretory.
+      include_directories(BEFORE SYSTEM ${PROJECT_SOURCE_DIR}/third_party/gloo)
+      include_directories(BEFORE SYSTEM ${PROJECT_BINARY_DIR}/third_party/gloo)
       set(BUILD_TEST ${__BUILD_TEST})
       set(BUILD_BENCHMARK ${__BUILD_BENCHMARK})
 
@@ -369,10 +413,9 @@ if(USE_GLOO)
       endif()
     endif()
     # Pick the right dependency depending on USE_CUDA
-    if(NOT USE_CUDA)
-      list(APPEND Caffe2_DEPENDENCY_LIBS gloo)
-    else()
-      list(APPEND Caffe2_DEPENDENCY_LIBS gloo_cuda)
+    list(APPEND Caffe2_DEPENDENCY_LIBS gloo)
+    if(USE_CUDA)
+      list(APPEND Caffe2_CUDA_DEPENDENCY_LIBS gloo_cuda)
     endif()
   endif()
 endif()
@@ -406,4 +449,12 @@ if (USE_METAL)
     message(WARNING "Metal is only used in ios builds.")
     set(USE_METAL OFF)
   endif()
+endif()
+
+if (USE_ATEN)
+  list(APPEND Caffe2_EXTERNAL_DEPENDENCIES aten_build)
+  list(APPEND Caffe2_DEPENDENCY_LIBS ATen)
+  caffe2_include_directories(${PROJECT_BINARY_DIR}/caffe2/contrib/aten/aten/src/ATen)
+  caffe2_include_directories(${PROJECT_SOURCE_DIR}/third_party/aten/src)
+  caffe2_include_directories(${PROJECT_BINARY_DIR}/caffe2/contrib/aten)
 endif()

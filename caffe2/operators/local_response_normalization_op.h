@@ -1,3 +1,19 @@
+/**
+ * Copyright (c) 2016-present, Facebook, Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #ifndef CAFFE2_OPERATORS_LOCAL_RESPONSE_NORMALIZATION_OP_H_
 #define CAFFE2_OPERATORS_LOCAL_RESPONSE_NORMALIZATION_OP_H_
 
@@ -66,6 +82,8 @@ class LRNOp final : public LRNOpBase<T, Context> {
  protected:
   // Input: X; Output: Y, scale.
   OUTPUT_TAGS(OUTPUT, SCALE);
+  Tensor<Context>* scale_ = nullptr;
+  Tensor<Context> local_scale_tensor_;
 };
 
 template <typename T, class Context>
@@ -81,6 +99,8 @@ class LRNGradientOp final : public LRNOpBase<T, Context> {
  protected:
   // Input: X, Y, scale, dY; Output: dX
   INPUT_TAGS(INPUT, OUTPUT, SCALE, OUTPUT_GRAD);
+  Tensor<Context>* scale_ = nullptr;
+  Tensor<Context> local_scale_tensor_;
 };
 
 } // namespace caffe2

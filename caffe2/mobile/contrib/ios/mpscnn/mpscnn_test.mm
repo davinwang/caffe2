@@ -1,13 +1,28 @@
-// Copyright 2004-present Facebook. All Rights Reserved.
+/**
+ * Copyright (c) 2016-present, Facebook, Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 
 #include "caffe2/core/common.h"
 
 #if CAFFE2_MOBILE && defined(CAFFE2_USE_MPSCNN_TEST)
 
-#include "mpscnn_graph_mask.h"
 #include "mpscnn_context.h"
+#include "mpscnn_graph_mask.h"
 
 #include "caffe2/core/logging.h"
+#include "caffe2/core/operator_schema.h"
 #include "caffe2/core/workspace.h"
 #include "caffe2/utils/proto_utils.h"
 
@@ -112,6 +127,74 @@ void testMPSCNN() {
                 }
               }
             }
+          }
+        }
+      }
+    }
+  }
+
+  {
+    for (const auto ndim : std::vector<size_t>{1, 2, 3, 4}) {
+      for (const auto N : std::vector<size_t>{1, 2}) {
+        LOG(INFO) << "MPSCNNCopyFrom/To ndim Test";
+        auto mtl = [&](size_t i) {
+          return std::string("X_mtl_") + std::to_string(i);
+        };
+        auto cpu = [&](size_t i) {
+          return std::string("X_cpu_") + std::to_string(i);
+        };
+        auto y_cpu = [&](size_t i) {
+          return std::string("Y_cpu_") + std::to_string(i);
+        };
+
+        Workspace ws;
+        for (auto i = 0; i < N; ++i) {
+          auto* t = ws.CreateBlob(cpu(i))->GetMutable<TensorCPU>();
+          switch (ndim) {
+            case 1:
+              t->Resize(5);
+              break;
+            case 2:
+              t->Resize(5, 3);
+              break;
+            case 3:
+              t->Resize(5, 3, 4);
+              break;
+            case 4:
+              t->Resize(5, 3, 4, 2);
+              break;
+          }
+          CPUContext ctx;
+          math::RandGaussian<float, CPUContext>(
+              t->size(), 0, 1, t->mutable_data<float>(), &ctx);
+        }
+
+        NetDef netdef;
+        {
+          auto& op = *(netdef.add_op());
+          op.set_type("CopyToMPSCNN");
+          for (auto i = 0; i < N; ++i) {
+            op.add_input(cpu(i));
+            op.add_output(mtl(i));
+          }
+        }
+        {
+          auto& op = *(netdef.add_op());
+          op.set_type("CopyFromMPSCNN");
+          for (auto i = 0; i < N; ++i) {
+            op.add_input(mtl(i));
+            op.add_output(y_cpu(i));
+          }
+        }
+
+        ws.RunNetOnce(netdef);
+        for (auto i = 0; i < N; ++i) {
+          const auto& t1 = ws.GetBlob(cpu(i))->Get<TensorCPU>();
+          const auto& t2 = ws.GetBlob(y_cpu(i))->Get<TensorCPU>();
+          CAFFE_ENFORCE_EQ(t1.size(), t2.size());
+          for (auto i = 0; i < t1.size(); ++i) {
+            // FP16 <-> FP32 round trip.
+            CHECK_NEAR(t1.data<float>()[i], t2.data<float>()[i], 1e-2);
           }
         }
       }
@@ -427,7 +510,7 @@ void testMPSCNN() {
           op.add_input("var");
           {
             auto& arg = *(op.add_arg());
-            arg.set_name("is_test");
+            arg.set_name(OpSchema::Arg_IsTest);
             arg.set_i(1);
           }
 
@@ -451,7 +534,7 @@ void testMPSCNN() {
           op.add_input("var");
           {
             auto& arg = *(op.add_arg());
-            arg.set_name("is_test");
+            arg.set_name(OpSchema::Arg_IsTest);
             arg.set_i(1);
           }
 
@@ -1488,6 +1571,134 @@ void testMPSCNN() {
   }
 
   {
+    LOG(INFO) << "MPSCNNMul Test";
+    Workspace ws;
+    {
+      auto* t = ws.CreateBlob("X0_cpu")->GetMutable<TensorCPU>();
+      t->Resize(1, 12, 57, 72);
+      CPUContext ctx;
+      math::RandGaussian<float, CPUContext>(t->size(), 0, 1, t->mutable_data<float>(), &ctx);
+    }
+
+    {
+      auto* t = ws.CreateBlob("X1_cpu")->GetMutable<TensorCPU>();
+      t->Resize(72);
+      CPUContext ctx;
+      math::RandGaussian<float, CPUContext>(t->size(), 0, 1, t->mutable_data<float>(), &ctx);
+    }
+
+    NetDef netdef;
+    {
+      auto& op = *(netdef.add_op());
+      op.set_type("CopyToMPSCNN");
+      op.add_input("X0_cpu");
+      op.add_output("X0_mtl");
+    }
+
+    {
+      auto& op = *(netdef.add_op());
+      op.set_type("MPSCNNMul");
+      op.add_input("X0_mtl");
+      op.add_input("X1_cpu");
+      op.add_output("Y_mtl");
+      add_arg_int(op, "broadcast", 1);
+    }
+
+    {
+      auto& op = *(netdef.add_op());
+      op.set_type("CopyFromMPSCNN");
+      op.add_input("Y_mtl");
+      op.add_output("Y_cpu");
+    }
+
+    {
+      auto& op = *(netdef.add_op());
+      op.set_type("Mul");
+      op.add_input("X0_cpu");
+      op.add_input("X1_cpu");
+      op.add_output("Y_ref");
+      add_arg_int(op, "broadcast", 1);
+    }
+
+    ws.RunNetOnce(netdef);
+    const auto& t2 = ws.GetBlob("Y_cpu")->Get<TensorCPU>();
+    const auto& t1 = ws.GetBlob("Y_ref")->Get<TensorCPU>();
+
+    CAFFE_ENFORCE_EQ(t1.dims(), t2.dims());
+    for (auto i = 0; i < t1.size(); ++i) {
+      // FP16 <-> FP32 round trip, accumulation, etc.
+      const float t1_i = t1.data<float>()[i];
+      const float t2_i = t2.data<float>()[i];
+      CHECK_NEAR(t1_i, t2_i, 0.01);
+    }
+  }
+
+  {
+    LOG(INFO) << "MPSCNNSub Test";
+    Workspace ws;
+    {
+      auto* t = ws.CreateBlob("X0_cpu")->GetMutable<TensorCPU>();
+      t->Resize(1, 12, 57, 72);
+      CPUContext ctx;
+      math::RandGaussian<float, CPUContext>(
+          t->size(), 0, 1, t->mutable_data<float>(), &ctx);
+    }
+
+    {
+      auto* t = ws.CreateBlob("X1_cpu")->GetMutable<TensorCPU>();
+      t->Resize(72);
+      CPUContext ctx;
+      math::RandGaussian<float, CPUContext>(
+          t->size(), 0, 1, t->mutable_data<float>(), &ctx);
+    }
+
+    NetDef netdef;
+    {
+      auto& op = *(netdef.add_op());
+      op.set_type("CopyToMPSCNN");
+      op.add_input("X0_cpu");
+      op.add_output("X0_mtl");
+    }
+
+    {
+      auto& op = *(netdef.add_op());
+      op.set_type("MPSCNNSub");
+      op.add_input("X0_mtl");
+      op.add_input("X1_cpu");
+      op.add_output("Y_mtl");
+      add_arg_int(op, "broadcast", 1);
+    }
+
+    {
+      auto& op = *(netdef.add_op());
+      op.set_type("CopyFromMPSCNN");
+      op.add_input("Y_mtl");
+      op.add_output("Y_cpu");
+    }
+
+    {
+      auto& op = *(netdef.add_op());
+      op.set_type("Sub");
+      op.add_input("X0_cpu");
+      op.add_input("X1_cpu");
+      op.add_output("Y_ref");
+      add_arg_int(op, "broadcast", 1);
+    }
+
+    ws.RunNetOnce(netdef);
+    const auto& t2 = ws.GetBlob("Y_cpu")->Get<TensorCPU>();
+    const auto& t1 = ws.GetBlob("Y_ref")->Get<TensorCPU>();
+
+    CAFFE_ENFORCE_EQ(t1.dims(), t2.dims());
+    for (auto i = 0; i < t1.size(); ++i) {
+      // FP16 <-> FP32 round trip, accumulation, etc.
+      const float t1_i = t1.data<float>()[i];
+      const float t2_i = t2.data<float>()[i];
+      CHECK_NEAR(t1_i, t2_i, 0.01);
+    }
+  }
+
+  {
     LOG(INFO) << "MPSAdd Test";
     Workspace ws;
     {
@@ -1715,7 +1926,7 @@ void testMPSCNN() {
       op.add_input("X_mtl");
       {
         auto& arg = *(op.add_arg());
-        arg.set_name("is_test");
+        arg.set_name(OpSchema::Arg_IsTest);
         arg.set_i(1);
       }
       op.add_output("Y_mtl");
@@ -1735,7 +1946,7 @@ void testMPSCNN() {
       op.add_input("X_cpu");
       {
         auto& arg = *(op.add_arg());
-        arg.set_name("is_test");
+        arg.set_name(OpSchema::Arg_IsTest);
         arg.set_i(1);
       }
       op.add_output("Y_ref");
@@ -2707,6 +2918,7 @@ void testMPSCNN() {
     CHECK_EQ(i0(2), o0(1));
     CHECK_EQ(o0(2), "Z");
   }
+  LOG(INFO) << "All MPSCNN tests passed.";
 }
 
 NetDef truncateAfter(NetDef def, size_t idx) {
@@ -2808,18 +3020,17 @@ void verifyRewrite(const NetDef& initNet, const NetDef& net, std::vector<int> in
   dumpDef(predictNet);
   dumpDef(metalPredictNet);
 
-#define RUN_NET(ws, predictNet) \
-  ws.RunNetOnce(initNet); \
-  { \
-    auto* t = ws.CreateBlob(predictNet.external_input(0))->GetMutable<TensorCPU>(); \
-    t->Resize(inputDims); \
-    CPUContext ctx; \
-    math::RandGaussian<float, CPUContext>( \
-        t->size(), 0, 1, t->mutable_data<float>(), &ctx); \
-  } \
+#define RUN_NET(ws, predictNet)                                                             \
+  ws.RunNetOnce(initNet);                                                                   \
+  {                                                                                         \
+    auto* t = ws.CreateBlob(predictNet.external_input(0))->GetMutable<TensorCPU>();         \
+    t->Resize(inputDims);                                                                   \
+    CPUContext ctx;                                                                         \
+    math::RandGaussian<float, CPUContext>(t->size(), 0, 1, t->mutable_data<float>(), &ctx); \
+  }                                                                                         \
   ws.RunNetOnce(predictNet);
 
-  //initialize
+  // initialize
   getMPSCNNContext();
 
   Workspace cws;
@@ -2837,15 +3048,15 @@ void verifyRewrite(const NetDef& initNet, const NetDef& net, std::vector<int> in
       LOG(INFO) << "One of the operator failed.";
       return;
     }
-    //CHECK_EQ(mt.dims(), ct.dims());
+    // CHECK_EQ(mt.dims(), ct.dims());
     for (auto j = 0; j < fmin(mt.size(), ct.size()); ++j) {
       if (mt.IsType<float>()) {
         if (j < 10) {
           LOG(INFO) << "i: " << i << ", j: " << j << ", CPU: " << ct.data<float>()[j]
                     << ", MTL: " << mt.data<float>()[j];
         }
-        //Disabling check for now because of precision issues
-        //CHECK_NEAR(mt.data<float>()[j], ct.data<float>()[j], 5);
+        // Disabling check for now because of precision issues
+        // CHECK_NEAR(mt.data<float>()[j], ct.data<float>()[j], 5);
       } else {
         LOG(INFO) << "Type uint8_t";
         CHECK(mt.IsType<uint8_t>());
@@ -2853,8 +3064,8 @@ void verifyRewrite(const NetDef& initNet, const NetDef& net, std::vector<int> in
           LOG(INFO) << "i: " << i << ", j: " << j << ", CPU: " << ct.data<uint8_t>()[j]
                     << ", MTL: " << mt.data<uint8_t>()[j];
         }
-        //Disabling check for now.
-        //CHECK_NEAR(mt.data<uint8_t>()[j], ct.data<uint8_t>()[j], 5);
+        // Disabling check for now.
+        // CHECK_NEAR(mt.data<uint8_t>()[j], ct.data<uint8_t>()[j], 5);
       }
     }
   }

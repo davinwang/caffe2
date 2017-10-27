@@ -1,3 +1,19 @@
+/**
+ * Copyright (c) 2016-present, Facebook, Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #ifndef CAFFE2_OPERATORS_WHILE_OP_H_
 #define CAFFE2_OPERATORS_WHILE_OP_H_
 
@@ -17,7 +33,7 @@ class WhileOp final : public Operator<Context> {
         "loop_net must be specified in While operator");
     loop_net_def_ =
         this->template GetSingleArgument<NetDef>("loop_net", NetDef());
-    loop_net_ = ws->CreateNet(loop_net_def_, true);
+    loop_net_ = CreateNet(loop_net_def_, ws);
     CAFFE_ENFORCE(loop_net_, "Failed to initialize loop subnet");
 
     cond_net_ = nullptr;
@@ -26,7 +42,7 @@ class WhileOp final : public Operator<Context> {
     if (has_cond_net) {
       cond_net_def_ =
           this->template GetSingleArgument<NetDef>("cond_net", NetDef());
-      cond_net_ = ws->CreateNet(cond_net_def_, true);
+      cond_net_ = CreateNet(cond_net_def_, ws);
       CAFFE_ENFORCE(cond_net_, "Failed to initialize condition subnet");
     }
   }
@@ -36,10 +52,10 @@ class WhileOp final : public Operator<Context> {
 
  private:
   NetDef loop_net_def_;
-  NetBase* loop_net_;
+  std::unique_ptr<NetBase> loop_net_;
 
   NetDef cond_net_def_;
-  NetBase* cond_net_;
+  std::unique_ptr<NetBase> cond_net_;
 };
 
 } // namespace caffe2

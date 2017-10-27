@@ -1,3 +1,19 @@
+/**
+ * Copyright (c) 2016-present, Facebook, Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #include "caffe2/core/common_gpu.h"
 #include "caffe2/core/asan.h"
 
@@ -152,8 +168,22 @@ int GetGPUIDForPointer(const void* ptr) {
   return attr.device;
 }
 
+struct CudaDevicePropWrapper {
+  CudaDevicePropWrapper() : props(NumCudaDevices()) {
+    for (int i = 0; i < NumCudaDevices(); ++i) {
+      CUDA_ENFORCE(cudaGetDeviceProperties(&props[i], i));
+    }
+  }
+
+  vector<cudaDeviceProp> props;
+};
+
 const cudaDeviceProp& GetDeviceProperty(const int deviceid) {
-  static vector<cudaDeviceProp> props;
+  // According to C++11 standard section 6.7, static local variable init is
+  // thread safe. See
+  //   https://stackoverflow.com/questions/8102125/is-local-static-variable-initialization-thread-safe-in-c11
+  // for details.
+  static CudaDevicePropWrapper props;
   CAFFE_ENFORCE_LT(
       deviceid,
       NumCudaDevices(),
@@ -162,13 +192,7 @@ const cudaDeviceProp& GetDeviceProperty(const int deviceid) {
       deviceid,
       " vs ",
       NumCudaDevices());
-  if (props.size() == 0) {
-    props.resize(NumCudaDevices());
-    for (int i = 0; i < NumCudaDevices(); ++i) {
-      CUDA_ENFORCE(cudaGetDeviceProperties(&props[i], i));
-    }
-  }
-  return props[deviceid];
+  return props.props[deviceid];
 }
 
 void DeviceQuery(const int device) {

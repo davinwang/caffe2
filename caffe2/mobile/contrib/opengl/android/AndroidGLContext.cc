@@ -1,7 +1,35 @@
+/**
+ * Copyright (c) 2016-present, Facebook, Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 #include "AndroidGLContext.h"
 #include "caffe2/core/logging.h"
 #include "gl3stub.h"
 #include <regex>
+
+namespace {
+
+static const std::unordered_map<std::string, GL_Renderer>& renderer_map() {
+  static std::unordered_map<std::string, GL_Renderer> m = {
+      {"Adreno", Adreno},
+      {"Mali", Mali},
+      {"NVIDIA", Tegra} /*, {"PowerVR", PowerVR} */};
+  return m;
+}
+
+} // namespace
 
 EGLContext AndroidGLContext::create_opengl_thread_context() {
   EGLSurface surface = EGL_NO_SURFACE;
@@ -97,17 +125,14 @@ void AndroidGLContext::init_gles3() {
   }
 }
 
-std::unordered_map<std::string, GL_Renderer> AndroidGLContext::_renderer_map = {
-    {"Adreno", Adreno}, {"Mali", Mali} /*, {"PowerVR", PowerVR} */};
-
 GL_Renderer AndroidGLContext::get_platform() {
   std::string rendererStr((const char*)glGetString(GL_RENDERER));
   std::regex regStr("^[A-Za-z]*");
   std::smatch matchs;
   if (std::regex_search(rendererStr, matchs, regStr)) {
     const std::string renderer = *matchs.begin();
-    auto found = _renderer_map.find(renderer);
-    if (found != _renderer_map.end()) {
+    auto found = renderer_map().find(renderer);
+    if (found != renderer_map().end()) {
       return found->second;
     }
   }

@@ -1,3 +1,18 @@
+# Copyright (c) 2016-present, Facebook, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+##############################################################################
+
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
@@ -53,6 +68,7 @@ class TesterBase:
                 op = core.CreateOperator(
                     prefix + op_name, inputs, ['output'], **operator_args
                 )
+                print('Operator %s' % op.type)
 
                 def seg_reduce(data, *args):
                     indices, segments = (
@@ -228,9 +244,9 @@ def max_grad(grad_out, outputs, inputs):
         out = flat_outputs[i]
         for j in range(blocks):
             idx = j * block_size + i
+            # we can produce multiple outputs for max
             if out == flat_inputs[idx]:
                 flat_grad_in[idx] = out_grad
-                break
 
     return np.resize(flat_grad_in, inputs[0].shape)
 
@@ -311,7 +327,7 @@ class TestSegmentOps(hu.HypothesisTestCase):
                 allow_empty=True,
             ),
             REFERENCES_ALL,
-            gpu=True,
+            gpu=workspace.has_gpu_support,
             grad_check=False,
         )(self)
 

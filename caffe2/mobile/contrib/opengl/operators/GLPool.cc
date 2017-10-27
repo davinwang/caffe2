@@ -1,4 +1,19 @@
-// Copyright 2004-present Facebook. All Rights Reserved.
+/**
+ * Copyright (c) 2016-present, Facebook, Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 
 #include "../core/GLFilter.h"
 #include "../core/GLImage.h"
@@ -37,7 +52,9 @@ class GLPool : public GLFilter {
             vertex_shader,
             fragment_shader,
             {
-                BINDING(inputData), BINDING(kernelSize), BINDING(outputSize),
+                BINDING(inputData),
+                BINDING(kernelSize),
+                BINDING(outputSize),
             },
             {/* no uniform blocks */},
             {/* no attributes */},
@@ -47,14 +64,17 @@ class GLPool : public GLFilter {
              {"INPUT_PADDING_Y", caffe2::to_string(_geometry.input_padding.y)},
              {"INPUT_STRIDE_X", caffe2::to_string(_geometry.input_stride.x)},
              {"INPUT_STRIDE_Y", caffe2::to_string(_geometry.input_stride.y)},
-             {"INPUT_TILE_WIDTH", caffe2::to_string(_geometry.input_tile_size.x)},
-             {"INPUT_TILE_HEIGHT", caffe2::to_string(_geometry.input_tile_size.y)},
-             {"OUTPUT_TILE_WIDTH", caffe2::to_string(_geometry.output_tile_size.x)},
-             {"OUTPUT_TILE_HEIGHT", caffe2::to_string(_geometry.output_tile_size.y)},
+             {"INPUT_TILE_WIDTH",
+              caffe2::to_string(_geometry.input_tile_size.x)},
+             {"INPUT_TILE_HEIGHT",
+              caffe2::to_string(_geometry.input_tile_size.y)},
+             {"OUTPUT_TILE_WIDTH",
+              caffe2::to_string(_geometry.output_tile_size.x)},
+             {"OUTPUT_TILE_HEIGHT",
+              caffe2::to_string(_geometry.output_tile_size.y)},
              {"TILED_POOLING", caffe2::to_string(_tiling)},
-             {"TEXTURE_BORDER_CLAMP",
-              caffe2::to_string(GLContext::getGLContext()->GL_EXT_texture_border_clamp_defined())},
-             {"MAX_POOL", caffe2::to_string(poolType == MaxPool)}}),
+             {"MAX_POOL", caffe2::to_string(poolType == MaxPool)},
+             {"BOUNDS_CHECK_MODE", caffe2::to_string(1)}}),
         geometry(_geometry) {}
   ~GLPool() {}
 
@@ -70,8 +90,7 @@ class GLPool : public GLFilter {
         run({{input_image->textures[is], inputData}},
             {output_image->textures[is]},
             [&]() {
-              glUniform2i(
-                  outputSize->location, output_image->texture_width, output_image->texture_height);
+              glUniform2i(outputSize->location, output_image->texture_width, output_image->texture_height);
               glUniform2i(kernelSize->location, geometry.kernel_size.x, geometry.kernel_size.y);
             },
             output_image->texture_width,
@@ -81,13 +100,31 @@ class GLPool : public GLFilter {
   }
 
  private:
+  /*
+   * Computes BOUNDS_CHECK_MODE for the convolution parameters.
+   *
+   * @retval 0 if bounds check can be skipped
+   * @retval non-zero if bounds check can not be skipped
+   */
+  inline static int bounds_check_mode(bool tiling, const descriptor& geometry) {
+    if (tiling) {
+      return 1;
+    }
+
+    if (GLContext::getGLContext()->GL_EXT_texture_border_clamp_defined() ||
+        (geometry.input_padding.x == 0 && geometry.input_padding.y == 0)) {
+      return 0;
+    } else {
+      return 1;
+    }
+  }
+
   static const char* fragment_shader;
 };
 
 // MARK: GLSL
 const char* GLPool::fragment_shader = R"GLSL(#version 300 es
 #define TILED_POOLING           $(TILED_POOLING)
-#define TEXTURE_BORDER_CLAMP    $(TEXTURE_BORDER_CLAMP)
 #define MAX_POOL                $(MAX_POOL)
 
 // tiling
@@ -95,6 +132,8 @@ const char* GLPool::fragment_shader = R"GLSL(#version 300 es
 #define INPUT_TILE_HEIGHT           $(INPUT_TILE_HEIGHT)
 #define OUTPUT_TILE_WIDTH           $(OUTPUT_TILE_WIDTH)
 #define OUTPUT_TILE_HEIGHT          $(OUTPUT_TILE_HEIGHT)
+
+#define BOUNDS_CHECK_MODE           $(BOUNDS_CHECK_MODE)
 
 precision mediump float;
 precision mediump int;
@@ -111,8 +150,11 @@ uniform ivec2 outputSize;
 TEXTURE_INPUT(inputData);
 TEXTURE_OUTPUT(0, outputData);
 
-const bool no_bounds = (TILED_POOLING == 0) && (bool(TEXTURE_BORDER_CLAMP) || all(equal(input_padding, ivec2(0))));
-#define IN_BOUNDS(p, p0, p1) (all(greaterThanEqual(p, p0)) && all(lessThan(p, p1)))
+#if BOUNDS_CHECK_MODE == 0
+  #define IN_BOUNDS(p, p0, p1) (true)
+#else
+  #define IN_BOUNDS(p, p0, p1) (all(greaterThanEqual(p, p0)) && all(lessThan(p, p1)))
+#endif
 
 // MIN_FLOAT is -2^14, which is the minimum precision requirement for mediump in OpenGL ES 3.0
 const float MIN_FLOAT = -exp2(14.0);
@@ -130,7 +172,7 @@ const ivec2 outputTileSize = ivec2(OUTPUT_TILE_WIDTH, OUTPUT_TILE_HEIGHT);
   for (int y = 0; y < kernelSize.y; y++) { \
     for (int x = 0; x < kernelSize.x; x++) { \
       ivec2 idx = tileCoord + ivec2(x, y); \
-      if (no_bounds || IN_BOUNDS(idx, ivec2(0), inputTileSize)) { \
+      if IN_BOUNDS(idx, ivec2(0), inputTileSize) { \
         vec4 data = TEXTURE_LOAD(inputData, inputTileOffset + idx); \
         pool = max(pool, data); \
       } \
@@ -145,7 +187,7 @@ const ivec2 outputTileSize = ivec2(OUTPUT_TILE_WIDTH, OUTPUT_TILE_HEIGHT);
   for (int y = 0; y < kernelSize.y; y++) { \
     for (int x = 0; x < kernelSize.x; x++) { \
       ivec2 idx = tileCoord + ivec2(x, y); \
-      if (no_bounds || IN_BOUNDS(idx, ivec2(0), inputTileSize)) { \
+      if IN_BOUNDS(idx, ivec2(0), inputTileSize) { \
         vec4 data = TEXTURE_LOAD(inputData, inputTileOffset + idx); \
         pool += data;\
         count += 1; \
@@ -188,7 +230,7 @@ void main() {
   for (int y = 0; y < kernelSize.y; y++) { \
     for (int x = 0; x < kernelSize.x; x++) { \
       ivec2 idx = texelCoord + ivec2(x, y); \
-      if (no_bounds || IN_BOUNDS(idx, ivec2(0), inputSize)) { \
+      if IN_BOUNDS(idx, ivec2(0), inputSize) { \
         vec4 data = TEXTURE_LOAD(inputData, idx); \
         pool = max(pool, data); \
       } \
@@ -203,7 +245,7 @@ void main() {
   for (int y = 0; y < kernelSize.y; y++) { \
     for (int x = 0; x < kernelSize.x; x++) { \
       ivec2 idx = texelCoord + ivec2(x, y); \
-      if (no_bounds || IN_BOUNDS(idx, ivec2(0), inputSize)) { \
+      if IN_BOUNDS(idx, ivec2(0), inputSize) { \
         vec4 data = TEXTURE_LOAD(inputData, idx); \
         pool += data; \
         count += 1; \
@@ -277,13 +319,8 @@ class GLPoolOp final : public ConvPoolOpBase<CPUContext>, ImageAllocator<float16
     const int input_tile_x = input.tile_x(), input_tile_y = input.tile_y();
     const int output_tile_x = input_tile_x, output_tile_y = input_tile_y;
 
-    GLImageVector<T>* output = ImageAllocator<T>::newImage(num_images,
-                                                           output_width,
-                                                           output_height,
-                                                           output_channels,
-                                                           output_tile_x,
-                                                           output_tile_y,
-                                                           is_last);
+    GLImageVector<T>* output = ImageAllocator<T>::newImage(
+        num_images, output_width, output_height, output_channels, output_tile_x, output_tile_y, is_last);
 
     GLPool::descriptor geometry{input_channels,
                                 {kernel_w(), kernel_h()},
@@ -293,10 +330,9 @@ class GLPoolOp final : public ConvPoolOpBase<CPUContext>, ImageAllocator<float16
                                 {output_height, output_width}};
 
     if (!glPool_) {
-      LOG(INFO) << input_channels << ": " << input_height << " X " << input_width << " => "
-                << output_channels << ": " << output_height << " X " << output_width
-                << " Kernel: " << kernel_w() << "X" << kernel_h() << " Tiling: " << input_tile_x
-                << "X" << input_tile_y;
+      LOG(INFO) << input_channels << ": " << input_height << " X " << input_width << " => " << output_channels << ": "
+                << output_height << " X " << output_width << " Kernel: " << kernel_w() << "X" << kernel_h()
+                << " Tiling: " << input_tile_x << "X" << input_tile_y;
 
       glPool_.reset(new GLPool(geometry, poolType, input_tile_x > 1 || input_tile_y > 1));
     }

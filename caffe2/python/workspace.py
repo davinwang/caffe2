@@ -1,3 +1,18 @@
+# Copyright (c) 2016-present, Facebook, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+##############################################################################
+
 ## @package workspace
 # Module caffe2.python.workspace
 from __future__ import absolute_import
@@ -45,16 +60,21 @@ if has_gpu_support:
     NumCudaDevices = C.num_cuda_devices
     SetDefaultGPUID = C.set_default_gpu_id
     GetDefaultGPUID = C.get_default_gpu_id
+    GetCUDAVersion = C.get_cuda_version
     GetCuDNNVersion = C.get_cudnn_version
 
     def GetCudaPeerAccessPattern():
         return np.asarray(C.get_cuda_peer_access_pattern())
+
+    GetDeviceProperties = C.get_device_properties
 else:
     NumCudaDevices = lambda: 0 # noqa
     SetDefaultGPUID = lambda x: None # noqa
     GetDefaultGPUID = lambda: 0 # noqa
     GetCuDNNVersion = lambda: 0 # noqa
+    GetCuDNNVersion = lambda: 0 # noqa
     GetCudaPeerAccessPattern = lambda: np.array([]) # noqa
+    GetDeviceProperties = lambda x: None # noqa
 
 
 def _GetFreeFlaskPort():
@@ -147,6 +167,9 @@ def CreateNet(net, overwrite=False, input_blobs=None):
         StringifyProto(net), overwrite,
     )
 
+
+def GetOperatorCost(operator, blobs):
+    return C.get_operator_cost(StringifyProto(operator), blobs)
 
 
 def RunOperatorOnce(operator):
