@@ -28,6 +28,7 @@ import os
 from caffe2.python import core, workspace, experiment_util, data_parallel_model
 from caffe2.python import dyndep, optimizer
 from caffe2.python import timeout_guard, model_helper, brew
+from caffe2.proto import caffe2_pb2
 
 import caffe2.python.models.resnet as resnet
 from caffe2.python.modeling.initializers import Initializer, pFP16Initializer
@@ -89,12 +90,15 @@ def AddNullInput(model, reader, batch_size, img_size, dtype):
     input. A label blob is hardcoded to a single value. This is useful if you
     want to test compute throughput or don't have a dataset available.
     '''
+    suffix = "_fp16" if dtype == "float16" else ""
     model.param_init_net.GaussianFill(
         [],
-        ["data"],
+        ["data" + suffix],
         shape=[batch_size, 3, img_size, img_size],
-        dtype=dtype,
     )
+    if dtype == "float16":
+        model.param_init_net.FloatToHalf("data" + suffix, "data")
+
     model.param_init_net.ConstantFill(
         [],
         ["label"],
@@ -147,8 +151,17 @@ def LoadModel(path, model):
 
     predict_init_net.RunAllOnGPU()
     init_net.RunAllOnGPU()
+
     assert workspace.RunNetOnce(predict_init_net)
     assert workspace.RunNetOnce(init_net)
+
+    # Hack: fix iteration counter which is in CUDA context after load model
+    itercnt = workspace.FetchBlob("optimizer_iteration")
+    workspace.FeedBlob(
+        "optimizer_iteration",
+        itercnt,
+        device_option=core.DeviceOption(caffe2_pb2.CPU, 0)
+    )
 
 
 def RunEpoch(
@@ -328,7 +341,8 @@ def Train(args):
         with brew.arg_scope([brew.conv, brew.fc],
                             WeightInitializer=initializer,
                             BiasInitializer=initializer,
-                            enable_tensor_core=args.enable_tensor_core):
+                            enable_tensor_core=args.enable_tensor_core,
+                            float16_compute=args.float16_compute):
             pred = resnet.create_resnet50(
                 model,
                 "data",
@@ -336,7 +350,6 @@ def Train(args):
                 num_labels=args.num_labels,
                 no_bias=True,
                 no_loss=True,
-                fp16_data=True if args.dtype == 'float16' else False,
             )
 
         if args.dtype == 'float16':
@@ -351,7 +364,8 @@ def Train(args):
     def add_optimizer(model):
         stepsz = int(30 * args.epoch_size / total_batch_size / num_shards)
 
-        if args.dtype == 'float16':
+        if args.float16_compute:
+            # TODO: merge with multi-prceision optimizer
             opt = optimizer.build_fp16_sgd(
                 model,
                 args.base_learning_rate,
@@ -577,6 +591,8 @@ def main():
     parser.add_argument('--dtype', default='float',
                         choices=['float', 'float16'],
                         help='Data type used for training')
+    parser.add_argument('--float16_compute', action='store_true',
+                        help="Use float 16 compute, if available")
     parser.add_argument('--enable-tensor-core', action='store_true',
                         help='Enable Tensor Core math for Conv and FC ops')
     parser.add_argument("--distributed_transport", type=str, default="tcp",

@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#include "caffe2/core/common_cudnn.h"
 #include "caffe2/core/context_gpu.h"
+#include "caffe2/core/cudnn_wrappers.h"
 #include "caffe2/operators/conv_op.h"
 #include "caffe2/operators/conv_op_cache_cudnn.h"
 #include "caffe2/operators/conv_pool_op_base.h"
@@ -432,7 +432,7 @@ bool CudnnConvOp::DoRunWithType() {
       vector<int> dims = {N, M, H_out, W_out, D_out};
       vector<int> strides = {M * H_out * W_out * D_out,
                              H_out * W_out * D_out,
-                             H_out * D_out,
+                             W_out * D_out,
                              D_out,
                              1};
       CUDNN_ENFORCE(cudnnSetTensorNdDescriptor(
@@ -795,7 +795,7 @@ bool CudnnConvGradientOp::DoRunWithType() {
       vector<int> dims = {N, M, H_out, W_out, D_out};
       vector<int> strides = {M * H_out * W_out * D_out,
                              H_out * W_out * D_out,
-                             H_out * D_out,
+                             W_out * D_out,
                              D_out,
                              1};
       CUDNN_ENFORCE(cudnnSetTensorNdDescriptor(

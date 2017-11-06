@@ -33,6 +33,8 @@
 
 CAFFE2_DEFINE_bool(caffe2_use_nvtx, false, "Use NVTX ranges for profiling");
 
+CAFFE2_DECLARE_bool(caffe2_dag_net_collect_stats);
+
 namespace caffe2 {
 
 namespace {
@@ -95,15 +97,20 @@ AsyncDAGNet::AsyncDAGNet(
   eventRecorded_.resize(net_def->op_size());
 
   // For all chains, their tail should consist the list of events that we are
-  // needing for synchronization in the Run() inteface.
+  // needing for synchronization in the Run() inteface, unless there are other
+  // chains depending on it.
   events_.reserve(execution_chains_.size());
   for (const auto& chain : execution_chains_) {
     const int tail_op_idx = chain.second.back();
-    events_.push_back(&operator_nodes_[tail_op_idx].operator_->event());
+    if (operator_nodes_[tail_op_idx].children_.empty()) {
+      events_.push_back(&operator_nodes_[tail_op_idx].operator_->event());
+    }
   }
+  VLOG(1) << "Total " << execution_chains_.size()
+          << " chains, final waiting on " << events_.size() << " events";
 }
 
-bool AsyncDAGNet::RunAt(const std::vector<int>& chain) {
+bool AsyncDAGNet::RunAt(int chain_id, const std::vector<int>& chain) {
   CAFFE_ENFORCE(!chain.empty(), "Chain should not be empty.");
   const auto source_idx = chain.front();
   const auto& parents = operator_nodes_[source_idx].parents_;
@@ -124,6 +131,15 @@ bool AsyncDAGNet::RunAt(const std::vector<int>& chain) {
         *operator_nodes_[source_parent_idx].operator_);
   }
 
+  if (FLAGS_caffe2_dag_net_collect_stats) {
+    const auto& device_option =
+        operator_nodes_[chain_id].operator_->event().GetDeviceOption();
+    CAFFE_EVENT(
+        stats_[device_option.device_type()],
+        task_wait_time_us,
+        task_timers_[chain_id]->MicroSeconds());
+  }
+
   // We've waited on all our parent indices.
   bool success = true;
   for (auto idx : chain) {
@@ -131,27 +147,30 @@ bool AsyncDAGNet::RunAt(const std::vector<int>& chain) {
     success &= operator_nodes_[idx].operator_->RunAsync();
   }
 
-  // Record an event for the sink of the chain.
   const auto& sink_idx = chain.back();
-  {
-    ProfiledRange r(
-        operator_nodes_[sink_idx].operator_->debug_def(), kRecordColor);
-    operator_nodes_[sink_idx].operator_->Record();
-  }
   CAFFE_ENFORCE(
       !eventRecorded_[sink_idx],
       "An event for ",
       sink_idx,
       " should not be recorded.");
   eventRecorded_[sink_idx] = 1;
+
+  if (FLAGS_caffe2_dag_net_collect_stats) {
+    const auto& device_option =
+        operator_nodes_[chain_id].operator_->event().GetDeviceOption();
+    CAFFE_EVENT(
+        stats_[device_option.device_type()],
+        task_time_to_scheduled_us,
+        task_timers_[chain_id]->MicroSeconds());
+  }
   return success;
 }
 
-bool AsyncDAGNet::RunAsync() {
+bool AsyncDAGNet::DoRunAsync() {
   // Reset the event tracking at each iteration
   eventRecorded_.assign(eventRecorded_.size(), 0);
 
-  const auto result = DAGNetBase::RunAsync();
+  const auto result = DAGNetBase::DoRunAsync();
   return result;
 }
 
