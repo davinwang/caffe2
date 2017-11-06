@@ -64,14 +64,14 @@ __global__ void NormalizeGradientKernel(
   typedef cub::BlockReduce<float, CAFFE_CUDA_NUM_THREADS> BlockReduce;
   __shared__ BlockReduce::TempStorage temp_storage_sum;
   __shared__ BlockReduce::TempStorage temp_storage_norm;
-  for (int i = blockIdx.x; i < M; i += gridDim.x) {
+  for (int i = blockIdx.x; i < N; i += gridDim.x) {
     float sum = 0.0;
     float norm = 0.0;
     __shared__ float row_sum;
     __shared__ float row_norm;
     __shared__ float row_norm_3;
-    auto base = (i / SF) * SF * N + (i % SF);
-    for (int j = threadIdx.x; j < N; j += blockDim.x) {
+    auto base = (i / SF) * SF * M + (i % SF);
+    for (int j = threadIdx.x; j < M; j += blockDim.x) {
       int index = base + j * SF;
       sum += in_mat[index] * grad_out_mat[index];
       norm += in_mat[index] * in_mat[index];
@@ -85,7 +85,7 @@ __global__ void NormalizeGradientKernel(
       row_norm_3 = pow(row_norm, 3);
     }
     __syncthreads();
-    for (int j = threadIdx.x; j < N; j += blockDim.x) {
+    for (int j = threadIdx.x; j < M; j += blockDim.x) {
       int index = base + j * SF;
       const float x_ij = in_mat[index];
       const float dy_ij = grad_out_mat[index];
