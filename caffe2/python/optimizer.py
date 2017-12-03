@@ -475,18 +475,30 @@ class AdagradOptimizer(Optimizer):
         )
 
         if self.rowWise:
-            shape = param_init_net.Shape(param, str(param) + "_shape")
-            num_rows = param_init_net.Slice(
-                [shape],
-                str(shape) + "_numrows",
-                starts=[0], ends=[1]
-            )
-            param_squared_sum = param_init_net.ConstantFill(
-                num_rows,
-                str(param) + "_avg_squared_sum",
-                input_as_shape=1,
-                value=0.0
-            )
+            shapes, types = workspace.InferShapesAndTypes([param_init_net])
+            if str(param) not in shapes:
+                # Type/shape inference is not available for this param, fallback
+                # on Shape/Slice logic
+                shape = param_init_net.Shape(param, str(param) + "_shape")
+                num_rows = param_init_net.Slice(
+                    [shape],
+                    str(shape) + "_numrows",
+                    starts=[0], ends=[1]
+                )
+                param_squared_sum = param_init_net.ConstantFill(
+                    num_rows,
+                    str(param) + "_avg_squared_sum",
+                    input_as_shape=1,
+                    value=0.0
+                )
+            else:
+                param_squared_sum = param_init_net.ConstantFill(
+                    [],
+                    str(param) + "_avg_squared_sum",
+                    shape=[shapes[str(param)][0]],
+                    value=0.0
+                )
+
         else:
             param_squared_sum = param_init_net.ConstantFill(
                 [param],
@@ -773,6 +785,93 @@ class YellowFinOptimizer(Optimizer):
         return
 
 
+class RmsPropOptimizer(Optimizer):
+    def __init__(
+        self,
+        alpha=0.01,
+        decay=0.9,
+        momentum=0.0,
+        epsilon=1e-5,
+        policy='fixed',
+        engine='',
+        **kwargs
+    ):
+        super(RmsPropOptimizer, self).__init__()
+        self.alpha = alpha
+        self.decay = decay
+        self.momentum = momentum
+        self.epsilon = epsilon
+        self.policy = policy
+        self.engine = engine
+        self.init_kwargs = kwargs
+
+    def _run(self, net, param_init_net, param_info):
+        param = param_info.blob
+        grad = param_info.grad
+
+        assert self.alpha > 0
+        assert not isinstance(grad, core.GradientSlice), \
+            "RmsPropOptimizer doesn't support sparse gradients"
+
+        dev = scope.CurrentDeviceScope()
+        if dev is None:
+            dev = core.DeviceOption(caffe2_pb2.CPU)
+
+        ONE = param_init_net.ConstantFill(
+            [],
+            "ONE_{}_{}".format(dev.device_type, dev.cuda_gpu_id),
+            shape=[1],
+            value=1.0
+        )
+
+        lr, _ = self.build_lr(
+            net,
+            param_init_net,
+            base_learning_rate=-self.alpha,
+            policy=self.policy,
+            **(self.init_kwargs)
+        )
+
+        grad_o = param_init_net.ConstantFill(
+            [param],
+            str(param) + "_grad_o",
+            values=0.0,
+        )
+
+        ms = param_init_net.ConstantFill(
+            [param],
+            str(param) + "_mean_squares",
+            values=0.0,
+        )
+
+        mom = param_init_net.ConstantFill(
+            [param],
+            str(param) + "_momentum",
+            values=0.0,
+        )
+
+        self._aux_params.local.append(ms)
+        self._aux_params.local.append(mom)
+
+        net.RmsProp(
+            [grad, ms, mom, ONE],
+            [grad_o, ms, mom],
+            decay=self.decay,
+            momentum=self.momentum,
+            epsilon=self.epsilon,
+            engine=self.engine,
+        )
+
+        net.MomentumSGDUpdate(
+            [grad_o, mom, lr, param],
+            [grad_o, mom, param],
+        )
+
+    def scale_learning_rate(self, scale):
+        self.alpha *= scale
+        return
+
+
 def _get_param_to_device(model):
     # Infer blob devices by going through the net and param_init_net
     # ops and observing the device used to create or use the blob.
@@ -1053,3 +1152,19 @@ def build_yellowfin(model, base_learning_rate=0.1, **kwargs):
         alpha=base_learning_rate,
         **kwargs)
     return _build(model, yellowfin_optimizer)
+
+
+def build_rms_prop(
+    model,
+    base_learning_rate,
+    max_gradient_norm=None,
+    allow_lr_injection=False,
+    **kwargs
+):
+    rms_prop_optimizer = RmsPropOptimizer(alpha=base_learning_rate, **kwargs)
+    return _build(
+        model,
+        rms_prop_optimizer,
+        max_gradient_norm=max_gradient_norm,
+        allow_lr_injection=allow_lr_injection,
+    )

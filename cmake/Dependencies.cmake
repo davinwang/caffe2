@@ -36,7 +36,6 @@ else()
 endif()
 
 
-
 # ---[ BLAS
 set(BLAS "Eigen" CACHE STRING "Selected BLAS library")
 set_property(CACHE BLAS PROPERTY STRINGS "Eigen;ATLAS;OpenBLAS;MKL;vecLib")
@@ -54,7 +53,6 @@ elseif(BLAS STREQUAL "OpenBLAS")
   find_package(OpenBLAS REQUIRED)
   caffe2_include_directories(${OpenBLAS_INCLUDE_DIR})
   list(APPEND Caffe2_DEPENDENCY_LIBS ${OpenBLAS_LIB})
-  list(APPEND Caffe2_DEPENDENCY_LIBS cblas)
 elseif(BLAS STREQUAL "MKL")
   find_package(MKL REQUIRED)
   caffe2_include_directories(${MKL_INCLUDE_DIR})
@@ -242,8 +240,8 @@ endif()
 set(EIGEN_MPL2_ONLY 1)
 find_package(Eigen3)
 if(EIGEN3_FOUND)
-  message(STATUS "Found system Eigen at " ${EIGEN3_INCLUDE_DIRS})
-  caffe2_include_directories(${EIGEN3_INCLUDE_DIRS})
+  message(STATUS "Found system Eigen at " ${EIGEN3_INCLUDE_DIR})
+  caffe2_include_directories(${EIGEN3_INCLUDE_DIR})
 else()
   message(STATUS "Did not find system Eigen. Using third party subdirectory.")
   caffe2_include_directories(${PROJECT_SOURCE_DIR}/third_party/eigen)
@@ -259,7 +257,6 @@ if(BUILD_PYTHON)
   set(USE_OBSERVERS ON)
   if(PYTHONINTERP_FOUND AND PYTHONLIBS_FOUND AND NUMPY_FOUND)
     caffe2_include_directories(${PYTHON_INCLUDE_DIRS} ${NUMPY_INCLUDE_DIR})
-    list(APPEND Caffe2_PYTHON_DEPENDENCY_LIBS ${PYTHON_LIBRARIES})
   else()
     message(WARNING "Python dependencies not met. Not compiling with python. Suppress this warning with -DBUILD_PYTHON=OFF")
     set(BUILD_PYTHON OFF)
@@ -328,15 +325,27 @@ endif()
 # ---[ CUDA
 if(USE_CUDA)
   include(cmake/Cuda.cmake)
-  # CUDA 8.0 requires GCC 5
   if(HAVE_CUDA)
-    if (CMAKE_C_COMPILER_ID STREQUAL "GNU" AND
-        NOT CMAKE_C_COMPILER_VERSION VERSION_LESS 6.0 AND
-        CUDA_HOST_COMPILER STREQUAL CMAKE_C_COMPILER)
-      message(FATAL_ERROR
-        "CUDA 8.0 is not compatible with GCC version >= 6. "
-        "Use the following option to use another version (for example): \n"
-        "  -DCUDA_HOST_COMPILER=/usr/bin/gcc-5\n")
+    # CUDA 9.0 requires GCC version <= 6
+    if (CUDA_VERSION VERSION_EQUAL 9.0)
+      if (CMAKE_C_COMPILER_ID STREQUAL "GNU" AND
+          NOT CMAKE_C_COMPILER_VERSION VERSION_LESS 7.0 AND
+          CUDA_HOST_COMPILER STREQUAL CMAKE_C_COMPILER)
+        message(FATAL_ERROR
+          "CUDA 9.0 is not compatible with GCC version >= 7. "
+          "Use the following option to use another version (for example): \n"
+          "  -DCUDA_HOST_COMPILER=/usr/bin/gcc-6\n")
+      endif()
+    # CUDA 8.0 requires GCC version <= 5
+    elseif (CUDA_VERSION VERSION_EQUAL 8.0)
+      if (CMAKE_C_COMPILER_ID STREQUAL "GNU" AND
+          NOT CMAKE_C_COMPILER_VERSION VERSION_LESS 6.0 AND
+          CUDA_HOST_COMPILER STREQUAL CMAKE_C_COMPILER)
+        message(FATAL_ERROR
+          "CUDA 8.0 is not compatible with GCC version >= 6. "
+          "Use the following option to use another version (for example): \n"
+          "  -DCUDA_HOST_COMPILER=/usr/bin/gcc-5\n")
+      endif()
     endif()
   endif()
   # ---[ CUDNN
@@ -461,4 +470,8 @@ if (USE_ATEN)
   caffe2_include_directories(${PROJECT_BINARY_DIR}/caffe2/contrib/aten/aten/src/ATen)
   caffe2_include_directories(${PROJECT_SOURCE_DIR}/third_party/aten/src)
   caffe2_include_directories(${PROJECT_BINARY_DIR}/caffe2/contrib/aten)
+endif()
+
+if (USE_ZSTD)
+  add_subdirectory(${PROJECT_SOURCE_DIR}/third_party/zstd/build/cmake)
 endif()

@@ -719,7 +719,7 @@ DEFINE_BROADCAST_BINARY_FUNCTION(Div, /)
 
 #define CAFFE2_SPECIALIZED_SET(T)                                             \
   template <>                                                                 \
-  void Set<T, CPUContext>(const TIndex N, const T alpha, T* Y, CPUContext*) { \
+  void Set<T, CPUContext>(const size_t N, const T alpha, T* Y, CPUContext*) { \
     if (alpha == (T)0) {                                                      \
       memset(Y, 0, N * sizeof(T));                                            \
     } else {                                                                  \
@@ -807,20 +807,26 @@ CAFFE2_SPECIALIZED_CPU_ADD_STRIPED_BATCH(float);
 
 template <>
 void RandUniform<float, CPUContext>(
-    const int n, const float a, const float b, float* r,
+    const size_t n,
+    const float a,
+    const float b,
+    float* r,
     CPUContext* context) {
   std::uniform_real_distribution<float> distribution(a, b);
-  for (int i = 0; i < n; ++i) {
+  for (auto i = 0; i < n; ++i) {
     r[i] = distribution(context->RandGenerator());
   }
 }
 
 template <>
 void RandUniform<int, CPUContext>(
-    const int n, const int a, const int b, int* r,
+    const size_t n,
+    const int a,
+    const int b,
+    int* r,
     CPUContext* context) {
   std::uniform_int_distribution<int> distribution(a, b);
-  for (int i = 0; i < n; ++i) {
+  for (auto i = 0; i < n; ++i) {
     r[i] = distribution(context->RandGenerator());
   }
 }
@@ -859,10 +865,13 @@ CAFFE2_SPECIALIZED_RAND_UNIFORM_UNIQUE(int64_t);
 
 template <>
 void RandGaussian<float, CPUContext>(
-    const int n, const float mean, const float std, float* r,
+    const size_t n,
+    const float mean,
+    const float std,
+    float* r,
     CPUContext* context) {
   std::normal_distribution<float> distribution(mean, std);
-  for (int i = 0; i < n; ++i) {
+  for (auto i = 0; i < n; ++i) {
     r[i] = distribution(context->RandGenerator());
   }
 }
@@ -1468,23 +1477,6 @@ void CopyMatrix<CPUContext>(
   }
 CAFFE2_SPECIALIZED_COPYVECTOR(float)
 #undef CAFFE2_SPECIALIZED_COPYVECTOR
-
-uint32_t randomNumberSeed() {
-  // Originally copied from folly::randomNumberSeed (at 418ad4)
-  // modified to use chrono instead of sys/time.h
-  static std::atomic<uint32_t> seedInput(0);
-  auto tv = std::chrono::system_clock::now().time_since_epoch();
-  uint64_t usec = static_cast<uint64_t>(
-      std::chrono::duration_cast<std::chrono::microseconds>(tv).count());
-  uint32_t tv_sec = usec / 1000000;
-  uint32_t tv_usec = usec % 1000000;
-  const uint32_t kPrime0 = 51551;
-  const uint32_t kPrime1 = 61631;
-  const uint32_t kPrime2 = 64997;
-  const uint32_t kPrime3 = 111857;
-  return kPrime0 * (seedInput++) + kPrime1 * static_cast<uint32_t>(getpid()) +
-      kPrime2 * tv_sec + kPrime3 * tv_usec;
-}
 
 }  // namespace math
 }  // namespace caffe2

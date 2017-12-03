@@ -35,12 +35,13 @@ option(USE_NERVANA_GPU "Use Nervana GPU backend" OFF)
 option(USE_NNPACK "Use NNPACK" ON)
 option(USE_OBSERVERS "Use Observer Library" OFF)
 option(USE_OPENCV "Use openCV" ON)
-option(USE_OPENMP "Use OpenMP for parallel code" ON)
+option(USE_OPENMP "Use OpenMP for parallel code" OFF)
 option(USE_REDIS "Use Redis" OFF)
 option(USE_ROCKSDB "Use RocksDB" ON)
 option(USE_SNPE "Use Qualcomm's SNPE library" OFF)
 option(USE_THREADS "Use Threads" ON)
 option(USE_ZMQ "Use ZMQ" OFF)
+option(USE_ZSTD "Use ZSTD" OFF)
 
 
 # ---[ CMake scripts + modules

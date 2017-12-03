@@ -32,6 +32,7 @@
 #include "caffe2/core/operator_schema.h"
 #include "caffe2/core/registry.h"
 #include "caffe2/core/tensor.h"
+#include "caffe2/core/types.h"
 #include "caffe2/core/workspace.h"
 #include "caffe2/proto/caffe2.pb.h"
 #include "caffe2/utils/proto_utils.h"
@@ -138,7 +139,9 @@ class OperatorBase : public Observable<OperatorBase> {
   }
 
   virtual void Finish() {
-    event_.Finish();
+    if (event_) {
+      event_->Finish();
+    }
   }
 
   virtual bool Run(int /* unused */ /*stream_id*/ = 0) {
@@ -221,20 +224,39 @@ class OperatorBase : public Observable<OperatorBase> {
     net_position_ = idx;
   }
 
-  const DeviceOption& device_option() {
+  const DeviceOption& device_option() const {
     return device_option_;
   }
 
   const Event& event() const {
-    return event_;
+    CAFFE_ENFORCE(event_, "Event is disabled");
+    return *event_;
   }
 
   Event& event() {
-    return event_;
+    CAFFE_ENFORCE(event_, "Event is disabled");
+    return *event_;
   }
 
   void ResetEvent() {
-    event_.Reset();
+    if (event_) {
+      event_->Reset();
+    }
+  }
+
+  void DisableEvent() {
+    event_ = nullptr;
+  }
+
+  bool IsEventDisabled() const {
+    return !event_;
+  }
+
+  // Checks whether stream is ready to execute new computation,
+  // used in stream allocation optimization to skip stream that is currently
+  // busy. Depends on context and operator's device, returns true by default
+  virtual bool IsStreamFree(int /* unused */) const {
+    return true;
   }
 
   const std::string& type() {
@@ -269,7 +291,7 @@ class OperatorBase : public Observable<OperatorBase> {
   }
 
   // An event used by asynchronous execution.
-  Event event_;
+  std::unique_ptr<Event> event_;
 
   DISABLE_COPY_AND_ASSIGN(OperatorBase);
 };
@@ -405,6 +427,10 @@ class Operator : public OperatorBase {
     }
   }
 
+  bool IsStreamFree(int stream_id) const override {
+    return context_.IsStreamFree(device_option(), stream_id);
+  }
+
   virtual bool RunOnDevice() = 0;
 
   // Returns whether operator has async on device part.
@@ -437,7 +463,9 @@ class Operator : public OperatorBase {
 
  protected:
   void RecordEvent(const char* err_msg = nullptr) final {
-    context_.Record(&event_, err_msg);
+    if (event_) {
+      context_.Record(event_.get(), err_msg);
+    }
   }
 
   std::string getErrorMsg() {

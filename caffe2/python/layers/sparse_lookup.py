@@ -44,11 +44,12 @@ def get_sparse_lookup_predictor_version(version):
 
 
 class SparseLookup(ModelLayer):
-    _id_list_supported_reducers = ['PositionWeighted', 'LogMeanExp', 'LogSumExp',
-                                   'Max', 'Mean', 'Sum', 'Sqrt', 'None']
+    _id_list_supported_reducers = [
+        'PositionWeighted', 'LogMeanExp', 'LogSumExp', 'Max', 'Mean', 'Sum',
+        'WeightedSum', 'WeightedMean', 'Sqrt', 'None']
 
-    _id_score_list_supported_reducers = ['PositionWeighted', 'Mean', 'Sum',
-                                         'WeightedSum', 'WeightedMean', 'None']
+    _id_score_list_supported_reducers = [
+        'PositionWeighted', 'Mean', 'Sum', 'WeightedSum', 'WeightedMean', 'None']
 
     def __init__(self, model, input_record, inner_shape, reducer,
                  weight_init=None, weight_optim=None,
@@ -186,10 +187,18 @@ class SparseLookup(ModelLayer):
         assert self.reducer in self._id_list_supported_reducers, (
             "Unsupported reducer: {} for ID_LIST".format(self.reducer)
         )
-        if self.reducer in ['Sum', 'Mean']:
+        if self.reducer in ['Sum', 'Mean', 'WeightedSum', 'WeightedMean']:
             op_input = [self.w,
                         self.input_record.items(),
                         self.input_record.lengths()]
+
+            # For id list features, the behaviors of 'Sum' and
+            # 'WeightedSum' are identical, since we can regard the weight on each
+            # id as 1. Similarly, for 'Mean' and 'WeightedMean'.
+            if self.reducer == 'WeightedSum':
+                self.reducer = 'Sum'
+            elif self.reducer == 'WeightedMean':
+                self.reducer = 'Mean'
 
             layer_name = 'SparseLengths' + self.reducer
             if version in ['fp32', 'fp16']:
@@ -211,7 +220,7 @@ class SparseLookup(ModelLayer):
         elif self.reducer == 'Sqrt':
             sqrt_weight = net.LengthsToWeights(
                 [self.input_record.lengths()],
-                [self.input_record.lengths() + '_sqrt'],
+                [net.NextScopedBlob('lengths_sqrt')],
                 power=0.5,
             )
             self._sparse_lengths_weighted_reducer(

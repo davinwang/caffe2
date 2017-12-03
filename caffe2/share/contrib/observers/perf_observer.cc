@@ -27,7 +27,7 @@ PerfNetObserver::PerfNetObserver(NetBase* subject_)
 
 PerfNetObserver::~PerfNetObserver() {}
 
-bool PerfNetObserver::Start() {
+void PerfNetObserver::Start() {
   static int visitCount = 0;
   // Select whether to log the operator or the net.
   // We have one sample rate for the entire app.
@@ -66,27 +66,24 @@ bool PerfNetObserver::Start() {
     /* Only start timer when we need to */
     timer_.Start();
   }
-  return true;
 }
 
-bool PerfNetObserver::Stop() {
-  if (logType_ == PerfNetObserver::NET_DELAY) {
-    auto current_run_time = timer_.MilliSeconds();
-    ObserverConfig::getReporter()->printNet(subject_, current_run_time);
-  } else if (logType_ == PerfNetObserver::OPERATOR_DELAY) {
-    auto current_run_time = timer_.MilliSeconds();
+void PerfNetObserver::Stop() {
+  if (logType_ == PerfNetObserver::NONE) {
+    return;
+  }
+  auto currentRunTime = timer_.MilliSeconds();
+  std::map<std::string, double> delays;
+  delays.insert({"NET_DELAY", currentRunTime});
+  if (logType_ == PerfNetObserver::OPERATOR_DELAY) {
     const auto& operators = subject_->GetOperators();
-    std::vector<std::pair<std::string, double>> operator_delays;
     for (int idx = 0; idx < operators.size(); ++idx) {
       const auto* op = operators[idx];
       auto name = getObserverName(op, idx);
       double delay = static_cast<const PerfOperatorObserver*>(observerMap_[op])
                          ->getMilliseconds();
-      std::pair<std::string, double> name_delay_pair = {name, delay};
-      operator_delays.push_back(name_delay_pair);
+      delays.insert({name, delay});
     }
-    ObserverConfig::getReporter()->printNetWithOperators(
-        subject_, current_run_time, operator_delays);
     /* clear all operator delay after use so that we don't spent time
        collecting the operator delay info in later runs */
     for (auto* op : operators) {
@@ -94,7 +91,7 @@ bool PerfNetObserver::Stop() {
     }
     observerMap_.clear();
   }
-  return true;
+  ObserverConfig::getReporter()->reportDelay(subject_, delays, "ms");
 }
 
 caffe2::string PerfNetObserver::getObserverName(const OperatorBase* op, int idx)
@@ -122,24 +119,28 @@ PerfOperatorObserver::PerfOperatorObserver(
 
 PerfOperatorObserver::~PerfOperatorObserver() {}
 
-bool PerfOperatorObserver::Start() {
+void PerfOperatorObserver::Start() {
   /* Get the time from the start of the net minus the time spent
      in previous invocations. It is the time spent on other operators.
      This way, when the operator finishes, the time from the start of the net
      minus the time spent in all other operators  is the total time on this
      operator. This is done to avoid saving a timer in each operator */
   milliseconds_ = netObserver_->getTimer().MilliSeconds() - milliseconds_;
-  return true;
 }
 
-bool PerfOperatorObserver::Stop() {
+void PerfOperatorObserver::Stop() {
   /* Time from the start of the net minus the time spent on all other
      operators is the time spent on this operator */
   milliseconds_ = netObserver_->getTimer().MilliSeconds() - milliseconds_;
-  return true;
 }
 
 double PerfOperatorObserver::getMilliseconds() const {
   return milliseconds_;
 }
+
+std::unique_ptr<ObserverBase<OperatorBase>> PerfOperatorObserver::clone() {
+  return std::unique_ptr<ObserverBase<OperatorBase>>(
+      new PerfOperatorObserver(this->subject_, netObserver_));
 }
+
+} // namespace caffe2

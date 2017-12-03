@@ -273,11 +273,10 @@ void Gemv(
     TensorProto::DataType math_type = TensorProto_DataType_FLOAT);
 
 template <typename T, class Context>
-void Set(const TIndex N, const T alpha, T* X, Context* context);
+void Set(const size_t N, const T alpha, T* X, Context* context);
 
 template <typename T, class Context>
-void RandUniform(const int n, const T a, const T b, T* r,
-                 Context* context);
+void RandUniform(const size_t n, const T a, const T b, T* r, Context* context);
 
 template <typename T, class Context>
 void RandUniformUnique(
@@ -291,7 +290,7 @@ void RandUniformUnique(
 
 template <typename T, class Context>
 void RandGaussian(
-    const int n,
+    const size_t n,
     const T mean,
     const T std,
     T* r,
@@ -441,8 +440,6 @@ void CopyMatrix(
 
 template <typename T, class Context>
 void CopyVector(const int N, const T* A, T* B, Context* context);
-
-uint32_t randomNumberSeed();
 
 // Function uses casting from int to unsigned to compare if value of
 // parameter a is greater or equal to zero and lower than value of

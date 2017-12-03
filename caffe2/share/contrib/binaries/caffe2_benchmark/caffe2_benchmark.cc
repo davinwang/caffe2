@@ -11,6 +11,15 @@
 #include "caffe2/utils/proto_utils.h"
 #include "caffe2/utils/string_utils.h"
 
+#if CAFFE2_MOBILE && (CAFFE2_ANDROID || CAFFE2_IOS)
+#include "caffe2/mobile/contrib/opengl/core/rewrite_net.h"
+#endif
+
+CAFFE2_DEFINE_string(
+    backend,
+    "default",
+    "The backend to use when running the model. The allowed "
+    "backend choices are: default, nnpack, opengl");
 CAFFE2_DEFINE_string(
     init_net,
     "",
@@ -35,6 +44,11 @@ CAFFE2_DEFINE_string(
     "the input blobs. If multiple input needed, use comma "
     "separated string. Must have the same number of items "
     "as input does.");
+CAFFE2_DEFINE_string(
+    input_type,
+    "float",
+    "Input type when specifying the input dimension."
+    "The supported types are float, uint8_t.");
 CAFFE2_DEFINE_int(iter, 10, "The number of iterations to run.");
 CAFFE2_DEFINE_string(net, "", "The given net to benchmark.");
 CAFFE2_DEFINE_string(
@@ -106,9 +120,9 @@ int main(int argc, char** argv) {
   unique_ptr<caffe2::Workspace> workspace(new caffe2::Workspace());
 
   // Run initialization network.
-  caffe2::NetDef net_def;
-  CAFFE_ENFORCE(ReadProtoFromFile(caffe2::FLAGS_init_net, &net_def));
-  CAFFE_ENFORCE(workspace->RunNetOnce(net_def));
+  caffe2::NetDef init_net_def;
+  CAFFE_ENFORCE(ReadProtoFromFile(caffe2::FLAGS_init_net, &init_net_def));
+  CAFFE_ENFORCE(workspace->RunNetOnce(init_net_def));
 
   // Load input.
   if (caffe2::FLAGS_input.size()) {
@@ -140,7 +154,14 @@ int main(int argc, char** argv) {
         caffe2::TensorCPU* tensor =
             workspace->GetBlob(input_names[i])->GetMutable<caffe2::TensorCPU>();
         tensor->Resize(input_dims);
-        tensor->mutable_data<float>();
+        if (caffe2::FLAGS_input_type == "float") {
+          tensor->mutable_data<float>();
+        } else {
+          CAFFE_ENFORCE(
+              caffe2::FLAGS_input_type == "uint8_t",
+              "Only supported input types are: float, uint8_t");
+          tensor->mutable_data<uint8_t>();
+        }
       }
     } else {
       CAFFE_THROW(
@@ -150,7 +171,36 @@ int main(int argc, char** argv) {
   }
 
   // Run main network.
+  caffe2::NetDef net_def;
   CAFFE_ENFORCE(ReadProtoFromFile(caffe2::FLAGS_net, &net_def));
+  if (caffe2::FLAGS_backend == "opengl") {
+#if CAFFE2_MOBILE && (CAFFE2_ANDROID || CAFFE2_IOS)
+    caffe2::NetDef opengl_net_def;
+    if (caffe2::tryConvertToOpenGL(init_net_def, net_def, &opengl_net_def)) {
+      net_def = opengl_net_def;
+      if (caffe2::FLAGS_run_individual) {
+        caffe2::FLAGS_run_individual = false;
+        LOG(INFO)
+            << "OpenGL implementation does not support individual operator delay. Run net delay only";
+      }
+    } else {
+      LOG(ERROR)
+          << "Net cannot be converted to OpenGL format, use original model instead";
+    }
+#else
+    LOG(ERROR) << "OpenGL build can only be used in mobile platform";
+#endif
+
+  } else if (caffe2::FLAGS_backend == "nnpack") {
+    for (int i = 0; i < net_def.op_size(); i++) {
+      caffe2::OperatorDef* op_def = net_def.mutable_op(i);
+      op_def->set_engine("NNPACK");
+    }
+  } else {
+    CAFFE_ENFORCE(
+        caffe2::FLAGS_backend == "default", "Backend is not supported");
+  }
+
   caffe2::NetBase* net = workspace->CreateNet(net_def);
   CHECK_NOTNULL(net);
 
